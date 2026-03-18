@@ -12,6 +12,178 @@ import type { AnalysisResult, RagEntry } from '../types'
 const STORAGE_KEY = 'studchecker-rag-v1'
 const MAX_ENTRIES = 200
 const VECTOR_TOP_TERMS = 300
+const IDF_KEY = 'studchecker-rag-idf-v1'
+
+interface IDFStats {
+  docFreq: Record<string, number>
+  totalDocs: number
+  lastUpdated: number
+}
+
+function getIDFStats(): IDFStats {
+  try {
+    const raw = localStorage.getItem(IDF_KEY)
+    return raw ? JSON.parse(raw) : { docFreq: {}, totalDocs: 0, lastUpdated: 0 }
+  } catch {
+    return { docFreq: {}, totalDocs: 0, lastUpdated: 0 }
+  }
+}
+
+function saveIDFStats(stats: IDFStats): void {
+  try {
+    localStorage.setItem(IDF_KEY, JSON.stringify(stats))
+  } catch {}
+}
+
+function updateIDFForWord(word: string, increment: number, stats: IDFStats): void {
+  stats.docFreq[word] = (stats.docFreq[word] || 0) + increment
+}
+
+function computeIDF(word: string, stats: IDFStats): number {
+  const df = stats.docFreq[word] || 0
+  if (df === 0) return 1
+  return Math.log(stats.totalDocs / df)
+}
+
+function rebuildIDFStats(entries: RagEntry[]): IDFStats {
+  const docFreq: Record<string, number> = {}
+  let totalDocs = entries.length
+
+  for (const entry of entries) {
+    if (!entry.termVector) continue
+    for (const word of Object.keys(entry.termVector)) {
+      docFreq[word] = (docFreq[word] || 0) + 1
+    }
+  }
+
+  const stats: IDFStats = { docFreq, totalDocs, lastUpdated: Date.now() }
+  saveIDFStats(stats)
+  return stats
+}
+
+// ── Reference examples by work type ────────────────────────────────────────────
+
+interface ReferenceExample {
+  workType: string
+  criteria: string[]
+  typicalMistakes: string[]
+  goodPractice: string[]
+  evaluationTips: string[]
+}
+
+const REFERENCE_EXAMPLES: ReferenceExample[] = [
+  {
+    workType: 'Реферат',
+    criteria: ['Актуальность темы', 'Структура', 'Раскрытие темы', 'Оформление', 'Выводы'],
+    typicalMistakes: [
+      'Переписывание текста из одного источника',
+      'Отсутствие анализа и обобщения материала',
+      'Неправильное оформление списка литературы',
+      'Отсутствие выводов или их формальность',
+      'Несоответствие объёма требованиям'
+    ],
+    goodPractice: [
+      'Использование 5+ разных источников',
+      'Наличие сравнительного анализа точек зрения',
+      'Чёткая структура с обоснованными выводами',
+      'Собственные обобщения автора'
+    ],
+    evaluationTips: [
+      'Проверить уникальность текста (плагиат)',
+      'Оценить глубину раскрытия темы',
+      'Проверить наличие анализа, а не только описания'
+    ]
+  },
+  {
+    workType: 'Курсовая работа',
+    criteria: ['Актуальность', 'Цель и задачи', 'Теоретическая часть', 'Практическая часть', 'Оформление', 'Выводы'],
+    typicalMistakes: [
+      'Цель не соответствует задачам',
+      'Теоретическая часть — пересказ учебника',
+      'Отсутствие практической значимости',
+      'Выводы не соответствуют задачам',
+      'Слабая методологическая база'
+    ],
+    goodPractice: [
+      'Чёткая формулировка цели и задач',
+      'Критический анализ литературы',
+      'Применение методов исследования',
+      'Конкретные практические рекомендации'
+    ],
+    evaluationTips: [
+      'Проверить логику: цель → задачи → выводы',
+      'Оценить самостоятельность исследования',
+      'Проверить наличие апробации результатов'
+    ]
+  },
+  {
+    workType: 'Лабораторная работа',
+    criteria: ['Цель работы', 'Описание хода работы', 'Результаты', 'Выводы', 'Оформление'],
+    typicalMistakes: [
+      'Цель сформулирована некорректно',
+      'Отсутствие промежуточных расчётов',
+      'Выводы не соответствуют результатам',
+      'Нарушение методики выполнения',
+      'Отсутствие погрешностей измерений'
+    ],
+    goodPractice: [
+      'Чёткая формулировка цели',
+      'Подробное описание методики',
+      'Таблицы и графики с результатами',
+      'Выводы, вытекающие из данных'
+    ],
+    evaluationTips: [
+      'Проверить правильность расчётов',
+      'Оценить глубину анализа результатов',
+      'Проверить соблюдение методики'
+    ]
+  },
+  {
+    workType: 'Эссе',
+    criteria: ['Актуальность проблемы', 'Аргументация', 'Логика рассуждений', 'Стиль изложения', 'Выводы'],
+    typicalMistakes: [
+      'Отсутствие собственной позиции',
+      'Пересказ чужих мыслей без анализа',
+      'Логические противоречия',
+      'Излишне формальный или разговорный стиль',
+      'Отсутствие примера-иллюстрации'
+    ],
+    goodPractice: [
+      'Чёткая авторская позиция',
+      'Логичная структура аргументов',
+      'Использование примеров из жизни/литературы',
+      'Глубокий анализ проблемы'
+    ],
+    evaluationTips: [
+      'Оценить оригинальность мысли',
+      'Проверить наличие контраргументов',
+      'Оценить глубину анализа'
+    ]
+  }
+]
+
+export function getReferenceExamples(workType: string): ReferenceExample | null {
+  return REFERENCE_EXAMPLES.find(ex => 
+    workType.toLowerCase().includes(ex.workType.toLowerCase())
+  ) || null
+}
+
+export function buildReferenceContext(workType: string, rubricName: string): string {
+  const ref = getReferenceExamples(workType)
+  if (!ref) return ''
+
+  const lines = [
+    `\nСПРАВОЧНЫЙ МАТЕРИАЛ ПО ТИПУ РАБОТЫ "${ref.workType}":`,
+    `\nТипичные ошибки в работах этого типа:`,
+    ...ref.typicalMistakes.map(m => `  • ${m}`),
+    `\nЧто характеризует качественную работу:`,
+    ...ref.goodPractice.map(g => `  • ${g}`),
+    `\nНа что обратить внимание при проверке:`,
+    ...ref.evaluationTips.map(t => `  • ${t}`)
+  ]
+
+  return lines.join('\n')
+}
 
 // ── Stop words (Russian + common English) ────────────────────────────────────
 
@@ -35,7 +207,7 @@ const STOP_WORDS = new Set([
   'this', 'that', 'are', 'was', 'for', 'on', 'with', 'as', 'at', 'be',
 ])
 
-// ── TF vector ─────────────────────────────────────────────────────────────────
+// ── TF-IDF vector ────────────────────────────────────────────────────────────────
 
 export function buildTermVector(text: string): Record<string, number> {
   const words = text
@@ -50,13 +222,16 @@ export function buildTermVector(text: string): Record<string, number> {
   const total = Object.values(freq).reduce((s, v) => s + v, 0)
   if (total === 0) return {}
 
-  // Normalize → TF
-  const tf: Record<string, number> = {}
-  for (const [k, v] of Object.entries(freq)) tf[k] = v / total
+  const idfStats = getIDFStats()
 
-  // Keep only top terms to limit storage size
+  const tfidf: Record<string, number> = {}
+  for (const [word, tf] of Object.entries(freq)) {
+    const idf = idfStats.totalDocs > 0 ? computeIDF(word, idfStats) : 1
+    tfidf[word] = (tf / total) * idf
+  }
+
   return Object.fromEntries(
-    Object.entries(tf).sort((a, b) => b[1] - a[1]).slice(0, VECTOR_TOP_TERMS)
+    Object.entries(tfidf).sort((a, b) => b[1] - a[1]).slice(0, VECTOR_TOP_TERMS)
   )
 }
 
@@ -138,6 +313,9 @@ export function addToKnowledgeBase(result: AnalysisResult, content: string): voi
 
   const updated = [entry, ...entries].slice(0, MAX_ENTRIES)
   saveKnowledgeBase(updated)
+  
+  const allEntries = getKnowledgeBase()
+  rebuildIDFStats(allEntries)
 }
 
 export interface SimilarEntry {
@@ -165,10 +343,12 @@ export function findSimilar(content: string, topK = 3): SimilarEntry[] {
 export function deleteEntry(id: string): void {
   const entries = getKnowledgeBase().filter((e) => e.id !== id)
   saveKnowledgeBase(entries)
+  rebuildIDFStats(entries)
 }
 
 export function clearKnowledgeBase(): void {
   localStorage.removeItem(STORAGE_KEY)
+  localStorage.removeItem(IDF_KEY)
 }
 
 export function getKnowledgeBaseStats(): {
@@ -238,4 +418,23 @@ export function buildRagContext(similar: SimilarEntry[]): string {
     )
   }
   return lines.join('\n')
+}
+
+/**
+ * Build complete context for LLM including reference examples and similar works.
+ */
+export function buildFullContext(
+  similar: SimilarEntry[],
+  workType: string,
+  rubricName: string
+): string {
+  const parts: string[] = []
+
+  const refContext = buildReferenceContext(workType, rubricName)
+  if (refContext) parts.push(refContext)
+
+  const ragContext = buildRagContext(similar)
+  if (ragContext) parts.push(ragContext)
+
+  return parts.join('\n')
 }

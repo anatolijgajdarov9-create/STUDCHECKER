@@ -36,7 +36,7 @@ interface AppState {
   selectedModelId: string | null
 
   // File queue
-  fileQueue: Array<{ name: string; content: string }>
+      fileQueue: Array<{ name: string; content: string; file?: File }>
   // kept for backward-compat (points to queue[0])
   currentFileName: string | null
   fileContent: string

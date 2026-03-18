@@ -47,8 +47,27 @@ export interface AnalysisResult {
 
 export interface PlanItem {
   criterion: string
+  criterionId: string
   prompt: string
   maxScore: number
+  recommendedModel: string
+  modelRationale: string
+  complexity: 'low' | 'medium' | 'high'
+  
+  step: number
+  isModelSwitch: boolean
+  
+  contextLimit: number
+  maxTokens: number
+  temperature: number
+  useFewShot: boolean
+  promptComplexity: 'minimal' | 'standard' | 'detailed'
+}
+
+export interface ExecutionPlan {
+  steps: PlanItem[]
+  estimatedSwitches: number
+  recommendedFirstModel: string
 }
 
 export type LogType = 'info' | 'success' | 'error' | 'warning'

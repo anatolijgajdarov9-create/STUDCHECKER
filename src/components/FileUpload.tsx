@@ -46,12 +46,12 @@ export default function FileUpload() {
     const arr = Array.from(files)
     if (arr.length === 0) return
     setIsLoading(true)
-    const loaded: Array<{ name: string; content: string }> = []
+    const loaded: Array<{ name: string; content: string; file: File }> = []
     for (const file of arr) {
       addLog(`Загрузка: ${file.name} (${formatFileSize(file.size)})`, 'info')
       try {
         const content = await extractText(file)
-        loaded.push({ name: file.name, content })
+        loaded.push({ name: file.name, content, file })
         addLog(`Загружен: ${file.name} — ${content.length} символов`, 'success')
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e)

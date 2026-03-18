@@ -1,13 +1,179 @@
-import type { Model, PlanItem, CriterionResult, RubricCriterion, Rubric } from '../types'
+import type { Model, PlanItem, CriterionResult, RubricCriterion, Rubric, AiModel, ExecutionPlan } from '../types'
+import { buildModelsDescription } from './modelSelector'
 
 export interface LlamaApiConfig {
   url: string
   temperature: number
   maxTokens: number
   modelId: string
+  modelCapability?: number
   sources?: Array<{ name: string; content: string }>
-  onLog: (message: string, type?: 'info' | 'success' | 'error' | 'warning') => void
+  onLog?: (message: string, type?: 'info' | 'success' | 'error' | 'warning') => void
   onRequestLog?: (entry: { criterion: string; prompt: string; response: string; durationMs: number; status: 'ok' | 'error' | 'timeout' }) => void
+}
+
+// ── Circuit Breaker ─────────────────────────────────────────────────────────────
+
+enum CircuitState { CLOSED = 'closed', OPEN = 'open', HALF_OPEN = 'half-open' }
+
+class CircuitBreaker {
+  private failures = 0
+  private lastFailureTime = 0
+  private state: CircuitState = CircuitState.CLOSED
+  private readonly failureThreshold: number
+  private readonly resetTimeout: number
+  private readonly halfOpenAttempts: number
+  private halfOpenSuccesses = 0
+
+  constructor(failureThreshold = 5, resetTimeout = 60000, halfOpenAttempts = 2) {
+    this.failureThreshold = failureThreshold
+    this.resetTimeout = resetTimeout
+    this.halfOpenAttempts = halfOpenAttempts
+  }
+
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.state === CircuitState.OPEN) {
+      if (Date.now() - this.lastFailureTime > this.resetTimeout) {
+        this.state = CircuitState.HALF_OPEN
+        this.halfOpenSuccesses = 0
+      } else {
+        throw new Error('Circuit breaker OPEN: too many failures, retry later')
+      }
+    }
+
+    try {
+      const result = await fn()
+      this.onSuccess()
+      return result
+    } catch (error) {
+      this.onFailure()
+      throw error
+    }
+  }
+
+  private onSuccess(): void {
+    if (this.state === CircuitState.HALF_OPEN) {
+      this.halfOpenSuccesses++
+      if (this.halfOpenSuccesses >= this.halfOpenAttempts) {
+        this.reset()
+      }
+    } else {
+      this.failures = 0
+    }
+  }
+
+  private onFailure(): void {
+    this.failures++
+    this.lastFailureTime = Date.now()
+    if (this.state === CircuitState.HALF_OPEN) {
+      this.state = CircuitState.OPEN
+    } else if (this.failures >= this.failureThreshold) {
+      this.state = CircuitState.OPEN
+    }
+  }
+
+  private reset(): void {
+    this.state = CircuitState.CLOSED
+    this.failures = 0
+    this.halfOpenSuccesses = 0
+  }
+
+  getState(): string {
+    return this.state
+  }
+}
+
+let globalCircuitBreaker: CircuitBreaker | null = null
+
+function getCircuitBreaker(): CircuitBreaker {
+  if (!globalCircuitBreaker) {
+    globalCircuitBreaker = new CircuitBreaker(5, 60000, 2)
+  }
+  return globalCircuitBreaker
+}
+
+function classifyError(error: unknown): 'timeout' | 'network' | 'server' | 'client' | 'unknown' {
+  const msg = error instanceof Error ? error.message : String(error)
+  if (error instanceof DOMException && error.name === 'AbortError') return 'timeout'
+  if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch')) return 'network'
+  if (/5\d{2}/.test(msg)) return 'server'
+  if (/4\d{2}/.test(msg)) return 'client'
+  return 'unknown'
+}
+
+function getRetryDelay(attempt: number, errorType: string): number {
+  const baseDelay = errorType === 'network' ? 5000 : 3000
+  const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000)
+  const jitter = Math.random() * 1000
+  return exponentialDelay + jitter
+}
+
+// ── Server readiness check ───────────────────────────────────────────────────────
+
+export async function waitForServerReady(url: string, timeoutMs = 60000): Promise<boolean> {
+  const start = Date.now()
+  const checkInterval = 3000
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${url}/v1/models`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      })
+      if (res.ok) return true
+    } catch {}
+    await new Promise<void>((r) => setTimeout(r, checkInterval))
+  }
+  return false
+}
+
+// ── Adaptive model parameters ──────────────────────────────────────────────────
+
+export interface ModelParams {
+  contextLimit: number
+  maxTokens: number
+  temperature: number
+  useFewShot: boolean
+  promptComplexity: 'minimal' | 'standard' | 'detailed'
+}
+
+export function getModelParams(capability: number): ModelParams {
+  if (capability < 40) {
+    return {
+      contextLimit: 800,
+      maxTokens: 200,
+      temperature: 0.05,
+      useFewShot: false,
+      promptComplexity: 'minimal'
+    }
+  }
+  if (capability < 60) {
+    return {
+      contextLimit: 1200,
+      maxTokens: 300,
+      temperature: 0.1,
+      useFewShot: true,
+      promptComplexity: 'standard'
+    }
+  }
+  return {
+    contextLimit: 1800,
+    maxTokens: 400,
+    temperature: 0.15,
+    useFewShot: true,
+    promptComplexity: 'detailed'
+  }
+}
+
+export function getCapabilityFromSize(sizeBytes: number): number {
+  const gb = sizeBytes / 1e9
+  if (gb >= 35) return 100
+  if (gb >= 18) return 90
+  if (gb >= 10) return 80
+  if (gb >= 6)  return 70
+  if (gb >= 3)  return 58
+  if (gb >= 1.5) return 46
+  return 35
 }
 
 export async function fetchModels(baseUrl: string): Promise<Model[]> {
@@ -42,47 +208,78 @@ async function callLLM(
   prompt: string,
   opts: CallOptions = {}
 ): Promise<{ text: string; durationMs: number }> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 300000)
-  const startTime = Date.now()
+  const timeoutMs = 300000
+  const maxRetries = 3
+  let lastError: Error | null = null
+  const circuitBreaker = getCircuitBreaker()
 
   const messages: Array<{ role: string; content: string }> = [
     { role: 'user', content: prompt }
   ]
-  // Prefix-anchor: forces the model to continue from a specific token sequence
   if (opts.assistantPrefix) {
     messages.push({ role: 'assistant', content: opts.assistantPrefix })
   }
 
-  try {
-    const res = await fetch(`${config.url}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        model: config.modelId,
-        messages,
-        temperature: opts.temperature ?? config.temperature,
-        max_tokens: opts.maxTokens ?? config.maxTokens,
-        ...(opts.stop ? { stop: opts.stop } : {})
-      }),
-      signal: controller.signal
-    })
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    let lastErrorType = 'unknown'
 
-    clearTimeout(timeoutId)
-    if (!res.ok) {
-      const errText = await res.text()
-      throw new Error(`HTTP ${res.status}: ${errText}`)
+    try {
+      const result = await circuitBreaker.execute(async () => {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+        const startTime = Date.now()
+
+        try {
+          const res = await fetch(`${config.url}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              model: config.modelId,
+              messages,
+              temperature: opts.temperature ?? config.temperature,
+              max_tokens: opts.maxTokens ?? config.maxTokens,
+              ...(opts.stop ? { stop: opts.stop } : {})
+            }),
+            signal: controller.signal
+          })
+
+          clearTimeout(timeoutId)
+
+          if (!res.ok) {
+            const errText = await res.text()
+            throw new Error(`HTTP ${res.status}: ${errText}`)
+          }
+
+          const data = await res.json()
+          const content = data.choices[0].message.content as string
+          const text = opts.assistantPrefix ? opts.assistantPrefix + content : content
+          return { text, durationMs: Date.now() - startTime }
+        } catch (e) {
+          clearTimeout(timeoutId)
+          throw e
+        }
+      })
+
+      return result
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e))
+      lastErrorType = classifyError(lastError)
+
+      const circuitBreakerState = circuitBreaker.getState()
+      if (circuitBreakerState === CircuitState.OPEN) {
+        config.onLog?.(`Circuit breaker OPEN: слишком много ошибок. Подождите и попробуйте позже.`, 'error')
+        throw lastError
+      }
+
+      if (attempt < maxRetries) {
+        const delay = getRetryDelay(attempt, lastErrorType)
+        config.onLog?.(`Попытка ${attempt} не удалась (${lastErrorType}): ${lastError.message}. Повтор через ${Math.round(delay / 1000)} сек...`, 'warning')
+        await new Promise<void>((r) => setTimeout(r, delay))
+      }
     }
-
-    const data = await res.json()
-    const content = data.choices[0].message.content as string
-    // If we used a prefix, prepend it back so the parser sees the full text
-    const text = opts.assistantPrefix ? opts.assistantPrefix + content : content
-    return { text, durationMs: Date.now() - startTime }
-  } catch (e) {
-    clearTimeout(timeoutId)
-    throw e
   }
+
+  throw lastError || new Error('Ошибка вызова LLM после всех попыток')
 }
 
 function extractJSON(text: string): unknown {
@@ -112,52 +309,323 @@ function extractJSON(text: string): unknown {
   throw new Error('JSON не найден в ответе модели')
 }
 
+const PLANNER_EXAMPLES = [
+  {
+    rubric: {
+      name: 'Реферат',
+      criteria: [
+        { name: 'Актуальность темы', maxScore: 10, weight: 15, description: 'Обоснование выбора темы, её значимость' },
+        { name: 'Структура', maxScore: 10, weight: 20, description: 'Наличие введения, основной части, заключения, списка литературы' },
+        { name: 'Раскрытие темы', maxScore: 10, weight: 35, description: 'Глубина раскрытия темы, использование источников' },
+        { name: 'Оформление', maxScore: 10, weight: 15, description: 'Соответствие требованиям ГОСТ' },
+        { name: 'Выводы', maxScore: 10, weight: 15, description: 'Наличие и качество выводов по теме' }
+      ]
+    },
+    content: 'В данном реферате рассматривается проблема глобального потепления. Автор приводит данные о повышении температуры...',
+    result: [
+      { criterion: 'Актуальность темы', prompt: 'Оцени: 1) Обоснована ли актуальность темы? 2) Указаны ли причины выбора темы? 3) Актуальна ли тема в современном контексте? Максимум — 10 баллов.', maxScore: 10 },
+      { criterion: 'Структура', prompt: 'Проверь: 1) Есть ли введение с целями/задачами? 2) Логично ли выстроена основная часть? 3) Есть ли заключение? 4) Указан ли список литературы (минимум 5 источников)?', maxScore: 10 },
+      { criterion: 'Раскрытие темы', prompt: 'Оцени глубину: 1) Раскрыта ли суть проблемы? 2) Использованы ли разные источники (книги, статьи, интернет)? 3) Есть ли анализ и обобщение материала? 4) Не списана ли работа целиком из одного источника?', maxScore: 10 },
+      { criterion: 'Оформление', prompt: 'Проверь: 1) Соответствует ли оформление требованиям? 2) Правильно ли оформлены ссылки и список литературы? 3) Соблюдены ли шрифт, интервалы, поля?', maxScore: 10 },
+      { criterion: 'Выводы', prompt: 'Оцени: 1) Сформулированы ли выводы? 2) Соответствуют ли они поставленным целям? 3) Есть ли в выводах обобщение основных положений?', maxScore: 10 }
+    ]
+  }
+]
+
 export async function runPlanner(
   config: LlamaApiConfig,
   rubric: Rubric,
-  contentPreview: string
-): Promise<PlanItem[]> {
-  const prompt = `Ты - Планировщик академической проверки. Проанализируй начало текста работы и рубрику, создай детальные промты для оценки каждого критерия.
+  contentPreview: string,
+  models?: AiModel[]
+): Promise<ExecutionPlan> {
+  const rubricBlock = rubric.criteria.map((c) => 
+    `- ${c.name} (макс ${c.maxScore} балл., вес ${c.weight}%): ${c.description}`
+  ).join('\n')
 
-РУБРИКА:
-${rubric.criteria.map((c) => `- ${c.name} (макс ${c.maxScore} балл., вес ${c.weight}%): ${c.description}`).join('\n')}
+  const modelsBlock = models && models.length > 0 
+    ? buildModelsDescription(models)
+    : 'Модели не переданы — выбери модель на основе описания работы.'
 
-ТЕКСТ РАБОТЫ (начало, первые 3000 символов):
-${contentPreview.substring(0, 3000)}
+  const sortedModels = models ? [...models].sort((a, b) => b.capability - a.capability) : []
+  const firstModelName = sortedModels[0]?.fileName || 'default'
 
-ЗАДАЧА: Создай JSON массив с детальным промтом для каждого критерия рубрики.
+  const examplesBlock = `
+ПРИМЕР ОПТИМАЛЬНОГО ПЛАНА (для понимания формата):
+Критерии: [Глубина анализа, Оформление, Логика, Оригинальность]
+Модели: [7B-сильная, 3B-быстрая]
 
-ФОРМАТ ОТВЕТА (строго JSON массив):
-[
-  {
-    "criterion": "Название критерия точно как в рубрике",
-    "prompt": "Детальный промт для эксперта: что проверять, на что обращать внимание, какие ошибки искать",
-    "maxScore": число
-  }
-]`
+ОПТИМАЛЬНЫЙ ПОРЯДОК:
+1. Шаг 1: "Оформление" → 3B → isModelSwitch=false (первая модель)
+2. Шаг 2: "Оригинальность" → 3B → isModelSwitch=false (та же модель)
+3. Шаг 3: "Логика" → 7B → isModelSwitch=true (переключение)
+4. Шаг 4: "Глубина анализа" → 7B → isModelSwitch=false (та же модель)
 
-  const { text: response } = await callLLM(config, prompt, { maxTokens: 2000 })
+Почему такой порядок? Сгруппировали все критерии с 3B вместе, потом 7B.
+Переключений: 2 (минимум)
+---`
+
+  const prompt = `Ты — умный планировщик проверки студенческих работ. Твоя задача — составить ОПТИМАЛЬНЫЙ план выполнения.
+
+${examplesBlock}
+
+КОНКРЕТНАЯ РАБОТА ДЛЯ АНАЛИЗА:
+${modelsBlock}
+
+РУБРИКА ОЦЕНКИ:
+${rubricBlock}
+
+ТЕКСТ РАБОТЫ (первые 2000 символов):
+${contentPreview.substring(0, 2000)}
+
+═══════════════════════════════════════════════════════════════
+ЗАДАНИЕ:
+═══════════════════════════════════════════════════════════════
+
+Для КАЖДОГО критерия:
+1. Оцени СЛОЖНОСТЬ: low (простые задачи) / medium / high (сложный анализ)
+2. Выбери ПОДХОДЯЩУЮ модель из списка
+3. Вычисли ПАРАМЕТРЫ для этой модели:
+   - contextLimit: 800 (маленькие модели) / 1200 (средние) / 1800 (большие)
+   - useFewShot: false (маленькие) / true (большие)
+4. Создай ПРОМТ для оценки
+
+═══════════════════════════════════════════════════════════════
+ПРАВИЛА ОПТИМАЛЬНОГО ПЛАНИРОВАНИЯ:
+═══════════════════════════════════════════════════════════════
+
+1. ПЕРВЫЙ ШАГ — используй самую мощную модель (для планировщика она уже загружена)
+2. ГРУППИРУЙ критерии по модели: все с одной моделью — вместе
+3. МИНИМИЗИРУЙ переключения: если модель A нужна для шагов 1 и 3, а B для шага 2 — сначала A (шаг 1), потом B (шаг 2), потом A (шаг 3)
+4. ПЕРВЫЙ шаг каждой группы должен иметь isModelSwitch=false (модель уже загружена)
+5. СЛЕДУЮЩИЕ шаги с той же моделью — isModelSwitch=false
+6. ПЕРВЫЙ шаг с НОВОЙ моделью — isModelSwitch=true
+
+═══════════════════════════════════════════════════════════════
+ВЫБОР МОДЕЛИ:
+═══════════════════════════════════════════════════════════════
+
+- high сложность → самая мощная модель (capability 70+)
+- medium сложность → модель capability 40-70
+- low сложность → любая модель, но быстрая лучше
+
+═══════════════════════════════════════════════════════════════
+ФОРМАТ ОТВЕТА (JSON):
+═══════════════════════════════════════════════════════════════
+
+{
+  "recommendedFirstModel": "имя файла первой модели (самая мощная)",
+  "estimatedSwitches": число,
+  "steps": [
+    {
+      "step": 1,
+      "criterion": "ТОЧНО название критерия из рубрики",
+      "criterionId": "id критерия из рубрики",
+      "recommendedModel": "имя файла модели",
+      "modelRationale": "1-2 предложения почему выбрана эта модель",
+      "complexity": "low|medium|high",
+      "isModelSwitch": false,
+      "contextLimit": 1200,
+      "maxTokens": 300,
+      "temperature": 0.1,
+      "useFewShot": true,
+      "promptComplexity": "minimal|standard|detailed",
+      "prompt": "Детальный промт для эксперта: что проверять, критерии оценки"
+    }
+  ]
+}`
+
+  const { text: response } = await callLLM(config, prompt, { maxTokens: 3500, temperature: 0.3 })
 
   try {
-    const plan = extractJSON(response)
-    if (Array.isArray(plan) && plan.length > 0) {
-      return plan as PlanItem[]
+    const rawPlan = extractJSON(response)
+    
+    if (rawPlan && typeof rawPlan === 'object' && 'steps' in rawPlan) {
+      const planData = rawPlan as Record<string, unknown>
+      const steps = (planData.steps as Array<Record<string, unknown>>).map((item, index) => {
+        const criterionName = String(item.criterion || '')
+        const rubricCriterion = rubric.criteria.find(c => c.name === criterionName)
+        const modelName = String(item.recommendedModel || firstModelName)
+        const model = models?.find(m => m.fileName === modelName)
+        const capability = model?.capability || 50
+        const params = getModelParams(capability)
+        
+        return {
+          criterion: criterionName,
+          criterionId: rubricCriterion?.id || String(index),
+          prompt: String(item.prompt || ''),
+          maxScore: rubricCriterion?.maxScore || Number(item.maxScore) || 10,
+          recommendedModel: modelName,
+          modelRationale: String(item.modelRationale || 'Модель выбрана планировщиком'),
+          complexity: (item.complexity as 'low' | 'medium' | 'high') || 'medium',
+          step: Number(item.step) || index + 1,
+          isModelSwitch: Boolean(item.isModelSwitch),
+          contextLimit: Number(item.contextLimit) || params.contextLimit,
+          maxTokens: Number(item.maxTokens) || params.maxTokens,
+          temperature: Number(item.temperature) || params.temperature,
+          useFewShot: item.useFewShot !== undefined ? Boolean(item.useFewShot) : params.useFewShot,
+          promptComplexity: (item.promptComplexity as 'minimal' | 'standard' | 'detailed') || params.promptComplexity
+        } as PlanItem
+      })
+
+      const estimatedSwitches = Number(planData.estimatedSwitches) || steps.filter(s => s.isModelSwitch).length
+      const recommendedFirstModel = String(planData.recommendedFirstModel || firstModelName)
+
+      config.onLog(`Планировщик: ${steps.length} шагов, ~${estimatedSwitches} переключений модели`, 'success')
+
+      return { steps, estimatedSwitches, recommendedFirstModel }
     }
+    
     throw new Error('Некорректная структура плана')
-  } catch {
-    config.onLog('Планировщик вернул некорректный JSON, используем стандартные промты', 'warning')
-    return rubric.criteria.map((c) => ({
+  } catch (e) {
+    config.onLog('Планировщик: ошибка парсинга, создаю базовый план', 'warning')
+    
+    const defaultModel = sortedModels[0]?.fileName || 'default'
+    const defaultCapability = sortedModels[0]?.capability || 50
+    const defaultParams = getModelParams(defaultCapability)
+    
+    const steps: PlanItem[] = rubric.criteria.map((c, i) => ({
       criterion: c.name,
-      prompt: `Оцени критерий "${c.name}" (${c.description}). Проверь работу и выстави оценку от 0 до ${c.maxScore}.`,
-      maxScore: c.maxScore
+      criterionId: c.id,
+      prompt: `Оцени критерий "${c.name}" (${c.description}). Выстави оценку от 0 до ${c.maxScore}.`,
+      maxScore: c.maxScore,
+      recommendedModel: defaultModel,
+      modelRationale: 'Модель по умолчанию',
+      complexity: 'medium' as const,
+      step: i + 1,
+      isModelSwitch: i === 0 ? false : true,
+      contextLimit: defaultParams.contextLimit,
+      maxTokens: defaultParams.maxTokens,
+      temperature: defaultParams.temperature,
+      useFewShot: defaultParams.useFewShot,
+      promptComplexity: defaultParams.promptComplexity
     }))
+
+    return { 
+      steps, 
+      estimatedSwitches: steps.length - 1, 
+      recommendedFirstModel: defaultModel 
+    }
   }
 }
 
+// ── Few-shot examples ─────────────────────────────────────────────────────────
+
+interface FewShotExample {
+  criterionName: string
+  criterionDescription: string
+  workExcerpt: string
+  score: number
+  maxScore: number
+  qualityLevel: 'excellent' | 'good' | 'satisfactory' | 'poor'
+  justification: string
+  recommendations: string
+}
+
+const FEW_SHOT_EXAMPLES: FewShotExample[] = [
+  // ОТЛИЧНО (9-10/10)
+  {
+    criterionName: 'Раскрытие темы',
+    criterionDescription: 'Полнота и глубина раскрытия основной темы работы',
+    workExcerpt: 'В работе детально анализируются причины глобального потепления: антропогенные факторы (сжигание ископаемого топлива даёт 75% выбросов CO2), промышленные выбросы метана, вырубка лесов. Приведены данные IPCC за 2023 год, конкретные примеры последствий для экосистем Арктики и коралловых рифов.',
+    score: 9,
+    maxScore: 10,
+    qualityLevel: 'excellent',
+    justification: 'Работа демонстрирует глубокое понимание темы. Автор использует научные данные, проводит анализ причин и последствий, приводит конкретные примеры. Материал изложен логично и систематизирован.',
+    recommendations: 'Работа выполнена на высоком уровне. Для совершенства можно добавить больше первичных источников и собственные наблюдения.'
+  },
+  // ХОРОШО (6-7/10)
+  {
+    criterionName: 'Раскрытие темы',
+    criterionDescription: 'Полнота и глубина раскрытия основной темы работы',
+    workExcerpt: 'В реферате рассматривается проблема загрязнения окружающей среды. Автор описывает основные виды загрязнений: воздуха, воды, почвы. Упоминает отдельные примеры негативного воздействия на природу.',
+    score: 6,
+    maxScore: 10,
+    qualityLevel: 'good',
+    justification: 'Тема раскрыта в общих чертах. Автор знаком с основными аспектами проблемы, но ограничивается описанием без глубокого анализа. Не хватает конкретных данных, статистики, причинно-следственных связей.',
+    recommendations: 'Добавить конкретные цифры и статистику. Углубить анализ причинно-следственных связей. Рассмотреть меньше тем, но раскрыть их более подробно.'
+  },
+  // УДОВЛЕТВОРИТЕЛЬНО (4-5/10)
+  {
+    criterionName: 'Раскрытие темы',
+    criterionDescription: 'Полнота и глубина раскрытия основной темы работы',
+    workExcerpt: 'В работе рассматривается тема загрязнения. Автор в общих чертах описывает, что загрязнение плохо для природы. Упоминает несколько терминов без объяснения их значения.',
+    score: 4,
+    maxScore: 10,
+    qualityLevel: 'satisfactory',
+    justification: 'Работа носит поверхностный характер. Автор не раскрывает суть проблемы, ограничивается общими фразами типа "загрязнение вредит природе". Отсутствует научная терминология и анализ.',
+    recommendations: 'Изучить предметную область более глубоко. Использовать научные источники вместо популярных статей. Объяснять специальные термины. Добавить структуру и логику изложения.'
+  },
+  // ПЛОХО (2-3/10)
+  {
+    criterionName: 'Раскрытие темы',
+    criterionDescription: 'Полнота и глубина раскрытия основной темы работы',
+    workExcerpt: 'Экология это когда природу загрязняют. Надо её защищать. В работе говорится о том что люди должны беречь природу.',
+    score: 2,
+    maxScore: 10,
+    qualityLevel: 'poor',
+    justification: 'Работа не раскрывает тему. Отсутствует какое-либо содержательное наполнение, нет определений, примеров, анализа. Текст представляет собой набор общих фраз без конкретики.',
+    recommendations: 'Кардинально переработать содержание. Изучить основы темы по учебникам и научным источникам. Начать с определений и базовых понятий. Обязательно использовать источники информации.'
+  },
+  // ЛОГИЧНОСТЬ - ХОРОШО
+  {
+    criterionName: 'Логичность изложения',
+    criterionDescription: 'Структурированность текста, наличие переходов между разделами, отсутствие противоречий',
+    workExcerpt: 'Введение формулирует цели работы. Затем последовательно рассматриваются причины, виды загрязнений и способы решения проблемы. Каждый раздел логически связан с предыдущим. Выводы соответствуют поставленным целям.',
+    score: 8,
+    maxScore: 10,
+    qualityLevel: 'good',
+    justification: 'Работа имеет чёткую логическую структуру. Прослеживается последовательность: проблема → анализ → решение. Используются связующие конструкции между разделами.',
+    recommendations: 'Хорошая работа. Можно усилить переходы между отдельными абзацами внутри разделов.'
+  },
+  // ЛОГИЧНОСТЬ - ПЛОХО
+  {
+    criterionName: 'Логичность изложения',
+    criterionDescription: 'Структурированность текста, наличие переходов между разделами, отсутствие противоречий',
+    workExcerpt: 'Сначала автор пишет о важности экологии. Затем резко переходит к истории промышленной революции. Далее снова возвращается к экологии, но без связи с предыдущим материалом. Встречаются внутренние противоречия в аргументации.',
+    score: 3,
+    maxScore: 10,
+    qualityLevel: 'poor',
+    justification: 'Работа имеет серьёзные логические проблемы: отсутствуют переходы между темами, нет связности изложения, присутствуют внутренние противоречия. Создаётся впечатление набора разрозненных фактов.',
+    recommendations: 'Составить план работы и следовать ему. Добавлять связующие фразы между абзацами. Проверить, что каждый раздел логически вытекает из предыдущего. Убрать противоречия в аргументации.'
+  }
+]
+
+function buildFewShotBlock(criterionName: string, criterionDescription: string, useExamples: boolean = true): string {
+  if (!useExamples) return ''
+  
+  const relevantExamples = FEW_SHOT_EXAMPLES.filter(ex => 
+    ex.criterionName.toLowerCase().includes(criterionName.toLowerCase().split(' ')[0])
+  )
+  
+  const selectedExamples = relevantExamples.slice(0, 2)
+  
+  if (selectedExamples.length === 0) return ''
+  
+  return selectedExamples.map((ex, i) => {
+    const levelLabel = {
+      excellent: 'ОТЛИЧНО',
+      good: 'ХОРОШО', 
+      satisfactory: 'УДОВЛЕТВОРИТЕЛЬНО',
+      poor: 'ПЛОХО'
+    }[ex.qualityLevel]
+    
+    return `
+ПРИМЕР ${i + 1} (${levelLabel} — ${ex.score}/${ex.maxScore}):
+Критерий: ${ex.criterionName}
+Что проверяем: ${ex.criterionDescription}
+Текст работы:
+${ex.workExcerpt}
+
+Оценка эксперта:
+Балл: ${ex.score}/${ex.maxScore}
+Обоснование: ${ex.justification}
+Рекомендации: ${ex.recommendations}
+---`
+  }).join('\n')
+}
+
 // ── Evaluation prompt ─────────────────────────────────────────────────────────
-// Uses marker-based output instead of JSON — far more reliable on 1B Q-models.
-// The assistant prefix "Балл: " anchors the response to start with the score
-// immediately, preventing preamble text and steering the format.
+// Uses Chain-of-Thought + few-shot learning for more accurate, consistent scores.
 
 export async function evaluateCriterion(
   config: LlamaApiConfig,
@@ -165,7 +633,6 @@ export async function evaluateCriterion(
   _planItem: PlanItem | null,
   fileContent: string
 ): Promise<CriterionResult> {
-  // Use less text for small models — quality > quantity
   const preview = fileContent.substring(0, 1800)
 
   const sourcesBlock = config.sources && config.sources.length > 0
@@ -173,9 +640,13 @@ export async function evaluateCriterion(
       config.sources.map((s) => `• ${s.name}: ${s.content.substring(0, 400)}`).join('\n') + '\n'
     : ''
 
-  // Marker-based prompt — no JSON syntax, just fill-in-the-blank
-  const prompt = `Ты проверяешь студенческую работу по одному критерию.
+  const fewShotBlock = buildFewShotBlock(criterion.name, criterion.description, true)
 
+  const prompt = `Ты — строгий эксперт по проверке студенческих работ. Твоя задача — объективно оценить работу по критерию.
+
+${fewShotBlock}
+
+ТЕКУЩАЯ РАБОТА ДЛЯ ПРОВЕРКИ:
 Критерий: ${criterion.name}
 Что проверяем: ${criterion.description}
 Максимум баллов: ${criterion.maxScore}
@@ -183,12 +654,23 @@ ${sourcesBlock}
 Текст работы студента:
 ${preview}
 
-Напиши оценку строго в таком формате (без лишних слов):
-Балл: [число от 0 до ${criterion.maxScore}]
-Обоснование: [конкретно о данной работе — что выполнено хорошо и что плохо]
-Улучшить: [2-3 пронумерованных шага: 1) что именно добавить/переработать; 2) что изучить/исправить. Если выше есть справочный материал — сошлись на него]`
+ЗАДАНИЕ:
+1) Внимательно изучи текст работы
+2) Сравни с примерами выше — насколько работа соответствует каждому уровню
+3) Выстави объективную оценку
 
-  // "Балл: " as assistant prefix forces model to output score first
+ШКАЛА ОЦЕНКИ:
+- 9-10/10: Отличная работа, все требования выполнены, высокое качество
+- 6-8/10: Хорошая работа, есть мелкие недочёты
+- 4-5/10: Удовлетворительно, видны существенные недостатки
+- 2-3/10: Неудовлетворительно, много серьёзных ошибок
+- 0-1/10: Критически плохо, работа не соответствует требованиям
+
+ФОРМАТ ОТВЕТА (только эти строки):
+Балл: [число]
+Обоснование: [конкретно: что сделано хорошо, что плохо]
+Улучшить: [1-2 совета по улучшению]`
+
   const ANCHOR = 'Балл: '
 
   let result: { text: string; durationMs: number }
@@ -196,8 +678,8 @@ ${preview}
 
   try {
     result = await callLLM(config, prompt, {
-      maxTokens: 350,
-      temperature: 0.15,           // low temperature → consistent, factual output
+      maxTokens: 400,
+      temperature: 0.1,
       assistantPrefix: ANCHOR,
       stop: ['\n\nКритерий', '\n\nТекст', '\n\nНапиши', '---', 'Задача:']
     })
@@ -212,11 +694,154 @@ ${preview}
   return parseModelResponse(result.text, criterion)
 }
 
+// ── Self-consistency evaluation ────────────────────────────────────────────────
+// Runs multiple evaluations and takes the median score for more consistent results.
+
+export async function evaluateCriterionWithConsistency(
+  config: LlamaApiConfig,
+  criterion: RubricCriterion,
+  planItem: PlanItem | null,
+  fileContent: string,
+  runs = 3
+): Promise<CriterionResult> {
+  const results: CriterionResult[] = []
+  const prompts: string[] = []
+
+  for (let i = 0; i < runs; i++) {
+    try {
+      const result = await evaluateCriterion(config, criterion, planItem, fileContent)
+      results.push(result)
+    } catch {
+      // Continue with other runs
+    }
+  }
+
+  if (results.length === 0) {
+    throw new Error('Все попытки оценки критерия завершились ошибкой')
+  }
+
+  if (results.length === 1) {
+    return results[0]
+  }
+
+  // Take median score for consistency
+  const scores = results.map(r => r.score).sort((a, b) => a - b)
+  const medianScore = scores[Math.floor(scores.length / 2)]
+
+  // Find the result closest to median for justification/recommendations
+  const medianResult = results.find(r => r.score === medianScore) || results[0]
+
+  // Average justifications/recommendations if multiple results
+  const bestJustification = medianResult.justification
+  const bestRecommendations = medianResult.recommendations
+
+  return {
+    ...medianResult,
+    score: medianScore,
+    justification: bestJustification,
+    recommendations: bestRecommendations
+  }
+}
+
+// ── Feedback loop for borderline cases ─────────────────────────────────────────
+// Iteratively refines borderline scores (30-75%) for more accurate assessment.
+
+const BORDERLINE_LOW = 0.3   // Below 30% — clear need for improvement
+const BORDERLINE_HIGH = 0.75 // Above 75% — good enough
+const MAX_FEEDBACK_ITERATIONS = 2
+const CONVERGENCE_THRESHOLD = 0.15 // Consider converged if score changed by < 15%
+
+export async function evaluateCriterionWithFeedback(
+  config: LlamaApiConfig,
+  criterion: RubricCriterion,
+  planItem: PlanItem | null,
+  fileContent: string,
+  useConsistency = true
+): Promise<CriterionResult> {
+  const evaluator = useConsistency
+    ? evaluateCriterionWithConsistency
+    : evaluateCriterion
+
+  let result = await evaluator(config, criterion, planItem, fileContent)
+  let iterations = 0
+  let previousScore = result.score
+
+  const isBorderline = (normalized: number) => 
+    normalized >= BORDERLINE_LOW && normalized <= BORDERLINE_HIGH
+
+  while (iterations < MAX_FEEDBACK_ITERATIONS) {
+    const normalizedScore = result.score / result.maxScore
+    
+    if (!isBorderline(normalizedScore)) {
+      break
+    }
+
+    iterations++
+    config.onLog(`Feedback итерация ${iterations} для "${criterion.name}" (${result.score}/${result.maxScore})`, 'info')
+    
+    const iterationContext = iterations > 1
+      ? `ПРЕДЫДУЩАЯ ИТЕРАЦИЯ: ${previousScore}/${result.maxScore} → ${result.score}/${result.maxScore}`
+      : `ПЕРВИЧНАЯ ОЦЕНКА: ${result.score}/${result.maxScore}`
+
+    const detailedPrompt = `Ты — строгий эксперт. Оцени работу повторно для уточнения.
+
+КРИТЕРИЙ: ${criterion.name}
+МАКСИМАЛЬНЫЙ БАЛЛ: ${criterion.maxScore}
+
+${iterationContext}
+
+ТЕКСТ РАБОТЫ (для справки):
+${fileContent.substring(0, 1200)}
+
+Вопросы для уточнения:
+1. Первичная оценка адекватна или завышена/занижена?
+2. Есть ли аргументы за повышение или понижение оценки?
+3. Какая итоговая оценка наиболее объективна?
+
+Если оценка изменилась — объясни почему.
+Если осталась той же — подтверди обоснование.
+
+ФОРМАТ ОТВЕТА:
+Балл: [число]
+Обоснование: [краткое обоснование с учётом итераций]`
+
+    try {
+      const detailedResult = await callLLM(config, detailedPrompt, {
+        maxTokens: 250,
+        temperature: 0.05,
+        assistantPrefix: 'Балл: '
+      })
+      
+      const refined = parseModelResponse(detailedResult.text, criterion)
+      previousScore = result.score
+      result = {
+        ...result,
+        score: refined.score,
+        justification: refined.justification,
+        recommendations: refined.recommendations,
+        strengths: refined.strengths,
+        weaknesses: refined.weaknesses
+      }
+
+      const scoreDiff = Math.abs(result.score - previousScore) / result.maxScore
+      if (scoreDiff < CONVERGENCE_THRESHOLD) {
+        config.onLog(`Feedback сошёлся для "${criterion.name}"`, 'info')
+        break
+      }
+    } catch {
+      break
+    }
+  }
+
+  return result
+}
+
 // ── Response parser ───────────────────────────────────────────────────────────
-// Three-pass strategy:
+// Four-pass strategy:
 //   Pass 1 — marker format  "Балл: N\nОбоснование: ...\nУлучшить: ..."
 //   Pass 2 — JSON extraction (model may still output JSON)
-//   Pass 3 — raw text heuristics (last resort)
+//   Pass 3 — structured analysis parsing (for CoT responses)
+//   Pass 4 — raw text heuristics (last resort)
 
 function parseModelResponse(raw: string, criterion: RubricCriterion): CriterionResult {
   const clamp = (n: number) => Math.max(0, Math.min(criterion.maxScore, isNaN(n) ? criterion.maxScore * 0.5 : n))
@@ -233,19 +858,15 @@ function parseModelResponse(raw: string, criterion: RubricCriterion): CriterionR
       weightedScore: Math.round(n * (criterion.weight / 100) * 10) / 10,
       justification: (justification || '').trim() || genJustification(s, criterion),
       recommendations: (recommendations || '').trim() || genRecommendation(s, criterion),
-      strengths: [],
-      weaknesses: []
+      strengths: extractStrengths(justification, criterion),
+      weaknesses: extractWeaknesses(justification, criterion)
     }
   }
 
   // ── Pass 1: marker format ─────────────────────────────────────────────────
-  // Matches lines like:
-  //   Балл: 7   /   Балл — 7   /   балл: 7/10
-  //   Обоснование: текст...
-  //   Улучшить: / Рекомендации: / Что улучшить: текст...
-  const scoreRx   = /(?:^|\n)\s*[Бб]алл\s*[:\-–—]\s*(\d+(?:\.\d+)?)/
-  const justRx    = /(?:^|\n)\s*[Оо]боснование\s*[:\-–—]\s*([\s\S]+?)(?=\n\s*(?:[УуРрЧч]|$))/
-  const recRx     = /(?:^|\n)\s*(?:[Уу]лучшить|[Рр]екоменд\w*|[Чч]то\s+улучшить)\s*[:\-–—]\s*([\s\S]+)/
+  const scoreRx = /(?:^|\n)\s*[Бб]алл\s*[:\-–—]\s*(\d+(?:\.\d+)?)/
+  const justRx  = /(?:^|\n)\s*[Оо]боснование\s*[:\-–—]\s*([\s\S]+?)(?=\n\s*(?:[УуРрЧч]|$))/
+  const recRx   = /(?:^|\n)\s*(?:[Уу]лучшить|[Рр]екоменд\w*|[Чч]то\s+улучшить)\s*[:\-–—]\s*([\s\S]+)/
 
   const scoreM = raw.match(scoreRx)
   const justM  = raw.match(justRx)
@@ -269,23 +890,47 @@ function parseModelResponse(raw: string, criterion: RubricCriterion): CriterionR
     }
   } catch { /* fall through */ }
 
-  // ── Pass 3: raw text heuristics ───────────────────────────────────────────
+  // ── Pass 3: structured analysis parsing (CoT responses) ───────────────────
+  // Look for analysis sections in Chain-of-Thought responses
+  const analysisSection = raw.match(/(?:Анализ|Разбор)[:\s]+([\s\S]+?)(?=\n\s*(?:Балл|Шаг|$))/i)
+  const analysisLines = analysisSection?.[1]?.split('\n').filter(l => l.trim()) || []
+  
+  // Extract score from analysis if found
+  const analysisScoreM = raw.match(/(?:Балл|Оценка)[:\s]+(\d+(?:\.\d+)?)\s*\/\s*(\d+)/)
+  if (analysisScoreM) {
+    const score = parseFloat(analysisScoreM[1])
+    const recM = raw.match(/(?:Улучшить|[Рр]екоменд)[:\s]+([\s\S]+)$/i)
+    const justification = analysisLines.join(' ').substring(0, 500)
+    const recommendations = recM ? recM[1].replace(/\n/g, ' ').trim().substring(0, 350) : ''
+    return build(score, justification, recommendations)
+  }
+
+  // ── Pass 4: raw text heuristics ───────────────────────────────────────────
   const scorePatterns = [
-    /(\d+(?:\.\d+)?)\s*\/\s*\d+/,            // 7/10
-    /оценк[аи][:\s]+(\d+(?:\.\d+)?)/i,       // оценка: 7
-    /^(\d+(?:\.\d+)?)\s*$/m                  // standalone number line
+    /(\d+(?:\.\d+)?)\s*\/\s*(\d+)/,            // 7/10 or 7/10
+    /оценк[аи][:\s]+(\d+(?:\.\d+)?)/i,          // оценка: 7
+    /(?:^|\n)\s*(\d+(?:\.\d+)?)\s*$/m,          // standalone number line
+    /(?:max|из)\s*(\d+(?:\.\d+)?)/i             // "из 10" pattern
   ]
   let score = criterion.maxScore * 0.5
   for (const p of scorePatterns) {
     const m = raw.match(p)
-    if (m) { const v = parseFloat(m[1]); if (v >= 0 && v <= criterion.maxScore) { score = v; break } }
+    if (m) { 
+      const v = parseFloat(m[1])
+      if (v >= 0 && v <= criterion.maxScore) { score = v; break }
+      // Handle "X/Y" format where Y is the max
+      if (m[2]) {
+        const maxFromPattern = parseFloat(m[2])
+        if (maxFromPattern > 0 && maxFromPattern <= 20) {
+          score = Math.round(v / maxFromPattern * criterion.maxScore)
+          break
+        }
+      }
+    }
   }
 
-  // Strip JSON/code fragments from text for cleaner extraction
   const clean = raw.replace(/```[\s\S]*?```/g, '').replace(/\{[\s\S]*?\}/g, '').replace(/\s{2,}/g, ' ').trim()
-
-  // Split on sentence boundaries, find recommendation section
-  const sentences = clean.split(/(?<=[.!?])\s+/)
+  const sentences = clean.split(/(?<=[.!?])\s+/).filter(s => s.length > 10)
   const recStart  = sentences.findIndex((s) => /рекоменд|улучш|следует|нужно|необходимо/i.test(s))
 
   let just: string
@@ -301,6 +946,36 @@ function parseModelResponse(raw: string, criterion: RubricCriterion): CriterionR
   }
 
   return build(score, just.substring(0, 500), rec.substring(0, 350))
+}
+
+// ── Helper extractors for strengths/weaknesses ─────────────────────────────────
+
+function extractStrengths(text: string, criterion: RubricCriterion): string[] {
+  const strengths: string[] = []
+  const positiveMarkers = [
+    'хорош', 'отличн', 'грамотн', 'полност', 'логичн', 'структуриров',
+    'правильн', 'глубок', 'детальн', 'аргументиров', 'содержательн',
+    'соответств', 'выполнен', 'раскрыт', 'обоснова'
+  ]
+  for (const marker of positiveMarkers) {
+    const m = text.match(new RegExp(`[^.]*${marker}[^.]*\\.`, 'gi'))
+    if (m) strengths.push(...m.slice(0, 1))
+  }
+  return [...new Set(strengths)].slice(0, 3)
+}
+
+function extractWeaknesses(text: string, criterion: RubricCriterion): string[] {
+  const weaknesses: string[] = []
+  const negativeMarkers = [
+    'недостат', 'слаб', 'отсутств', 'неполн', 'поверхност', 'ошибк',
+    'нарушен', 'несоответств', 'упрощен', 'нелогич', 'неструктуриров',
+    'отсутствует', 'не указан', 'не раскрыт'
+  ]
+  for (const marker of negativeMarkers) {
+    const m = text.match(new RegExp(`[^.]*${marker}[^.]*\\.`, 'gi'))
+    if (m) weaknesses.push(...m.slice(0, 1))
+  }
+  return [...new Set(weaknesses)].slice(0, 3)
 }
 
 // ── Fallback text generators ──────────────────────────────────────────────────

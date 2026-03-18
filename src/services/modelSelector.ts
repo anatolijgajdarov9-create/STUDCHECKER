@@ -1,6 +1,92 @@
 import type { AiModel, RubricCriterion } from '../types'
 import type { RawAiModel } from '../types/electron'
 
+// ── Model description builder for LLM ─────────────────────────────────────────
+
+export interface ModelDescription {
+  fileName: string
+  displayName: string
+  sizeLabel: string
+  capability: number
+  suggestedUseCases: string[]
+}
+
+function inferSuggestedUseCases(model: AiModel): string[] {
+  const cases: string[] = []
+  const name = model.displayName.toLowerCase()
+  const size = model.size / 1e9
+
+  if (size >= 7) {
+    cases.push('глубокий анализ текста', 'сложная аргументация', 'генерация текста')
+  } else if (size >= 3) {
+    cases.push('оценка студенческих работ', 'анализ по критериям', 'проверка структуры')
+  } else {
+    cases.push('быстрая проверка', 'простые формальные критерии', 'оформление')
+  }
+
+  if (name.includes('qwen') || name.includes(' llama')) {
+    cases.push('логический анализ', 'резюмирование')
+  }
+  if (name.includes('math') || name.includes('code')) {
+    cases.push('технические расчёты', 'программирование')
+  }
+
+  return cases
+}
+
+export function describeModel(model: AiModel): ModelDescription {
+  return {
+    fileName: model.fileName,
+    displayName: model.displayName,
+    sizeLabel: model.sizeLabel,
+    capability: model.capability,
+    suggestedUseCases: inferSuggestedUseCases(model)
+  }
+}
+
+export function buildModelsDescription(models: AiModel[]): string {
+  if (models.length === 0) return 'Модели не обнаружены.'
+
+  const sorted = [...models].sort((a, b) => b.capability - a.capability)
+
+  const lines: string[] = ['ДОСТУПНЫЕ МОДЕЛИ:']
+  
+  for (const m of sorted) {
+    const desc = describeModel(m)
+    lines.push(
+      `\n${desc.displayName}`,
+      `  Файл: ${desc.fileName}`,
+      `  Размер: ${desc.sizeLabel} (~${desc.capability}/100 capability)`,
+      `  Рекомендуется для: ${desc.suggestedUseCases.join(', ')}`
+    )
+  }
+
+  return lines.join('\n')
+}
+
+export function findModelByName(models: AiModel[], fileName: string): AiModel | undefined {
+  return models.find(m => 
+    m.fileName === fileName || 
+    m.displayName.toLowerCase() === fileName.toLowerCase()
+  )
+}
+
+export function findClosestModel(models: AiModel[], targetCapability: number): AiModel {
+  const sorted = [...models].sort((a, b) => b.capability - a.capability)
+  let closest = sorted[0]
+  let minDiff = Math.abs(closest.capability - targetCapability)
+
+  for (const m of sorted) {
+    const diff = Math.abs(m.capability - targetCapability)
+    if (diff < minDiff) {
+      minDiff = diff
+      closest = m
+    }
+  }
+
+  return closest
+}
+
 // ── Parsing ──────────────────────────────────────────────────────────────────
 
 function formatSize(bytes: number): string {

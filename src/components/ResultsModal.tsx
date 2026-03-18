@@ -1,18 +1,39 @@
 import React, { useEffect, useRef } from 'react'
 import { Chart, ArcElement, Tooltip, Legend, DoughnutController } from 'chart.js'
-import { marked } from 'marked'
 import { useStore } from '../store/useStore'
 
 Chart.register(ArcElement, Tooltip, Legend, DoughnutController)
 
+function stripMarkdown(text: string): string {
+  if (!text) return ''
+  return text
+    .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+[.)\s]+\s*/gm, '')
+    .replace(/^\s*>\s+/gm, '')
+    .replace(/\n{2,}/g, ' ')
+    .replace(/\n/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
 function formatRecommendation(text: string): string[] {
-  // Split on numbered patterns: "1)", "1.", "2)", "2." etc.
-  const parts = text.split(/(?:^|\s)(?:\d+[).])\s+/u).map(s => s.trim()).filter(Boolean)
+  const clean = stripMarkdown(text)
+  const parts = clean.split(/(?:^|\s)(?:\d+[).])\s+/u).map(s => s.trim()).filter(Boolean)
   if (parts.length > 1) return parts
-  // Split on semicolons if present
-  const semi = text.split(/;\s*/).map(s => s.trim()).filter(Boolean)
+  const semi = clean.split(/;\s*/).map(s => s.trim()).filter(Boolean)
   if (semi.length > 1) return semi
-  return [text]
+  return [clean]
+}
+
+function stripMarkdownHtml(html: string): string {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  return stripMarkdown(div.textContent || div.innerText || '')
 }
 
 export default function ResultsModal() {
@@ -179,14 +200,8 @@ export default function ResultsModal() {
                 const scoreColor =
                   pct >= 80 ? 'text-emerald-600' : pct >= 50 ? 'text-amber-600' : 'text-red-600'
 
-                // Render justification as markdown if possible
-                const feedbackHtml = (() => {
-                  try {
-                    return marked.parse(c.justification) as string
-                  } catch {
-                    return `<p>${c.justification}</p>`
-                  }
-                })()
+                // Render justification as plain text (no markdown)
+                const feedbackText = stripMarkdown(c.justification)
 
                 return (
                   <div key={c.criterionName} className="bg-slate-50 rounded-xl border border-slate-200 p-4">
@@ -206,24 +221,25 @@ export default function ResultsModal() {
                       />
                     </div>
                     <div
-                      className="text-xs text-slate-600 prose prose-xs max-w-none mb-2"
-                      dangerouslySetInnerHTML={{ __html: feedbackHtml }}
-                    />
+                      className="text-xs text-slate-600 mb-2 whitespace-pre-wrap"
+                    >
+                      {feedbackText}
+                    </div>
                     {c.recommendations && (
                       <p className="text-xs text-blue-700 bg-blue-50 rounded-lg px-3 py-1.5 border border-blue-100 mb-2">
                         <i className="fa-solid fa-lightbulb mr-1" />
-                        {c.recommendations}
+                        {stripMarkdown(c.recommendations)}
                       </p>
                     )}
                     <div className="flex gap-3 flex-wrap">
                       {c.strengths.map((s, i) => (
                         <span key={i} className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-                          + {s}
+                          + {stripMarkdown(s)}
                         </span>
                       ))}
                       {c.weaknesses.map((w, i) => (
                         <span key={i} className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
-                          − {w}
+                          − {stripMarkdown(w)}
                         </span>
                       ))}
                     </div>

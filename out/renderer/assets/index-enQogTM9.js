@@ -1,3 +1,23 @@
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["./index-CSMnDSpy.js","./jszip.min-CPJtzQpf.js"])))=>i.map(i=>d[i]);
+function _mergeNamespaces(n2, m2) {
+  for (var i = 0; i < m2.length; i++) {
+    const e = m2[i];
+    if (typeof e !== "string" && !Array.isArray(e)) {
+      for (const k2 in e) {
+        if (k2 !== "default" && !(k2 in n2)) {
+          const d = Object.getOwnPropertyDescriptor(e, k2);
+          if (d) {
+            Object.defineProperty(n2, k2, d.get ? d : {
+              enumerable: true,
+              get: () => e[k2]
+            });
+          }
+        }
+      }
+    }
+  }
+  return Object.freeze(Object.defineProperty(n2, Symbol.toStringTag, { value: "Module" }));
+}
 var commonjsGlobal = typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : {};
 function getDefaultExportFromCjs(x2) {
   return x2 && x2.__esModule && Object.prototype.hasOwnProperty.call(x2, "default") ? x2["default"] : x2;
@@ -97,7 +117,7 @@ function N$1(a, b) {
 function O$1(a) {
   return "object" === typeof a && null !== a && a.$$typeof === l$1;
 }
-function escape$3(a) {
+function escape$1(a) {
   var b = { "=": "=0", ":": "=2" };
   return "$" + a.replace(/[=:]/g, function(a2) {
     return b[a2];
@@ -105,7 +125,7 @@ function escape$3(a) {
 }
 var P$1 = /\/+/g;
 function Q$1(a, b) {
-  return "object" === typeof a && null !== a && null != a.key ? escape$3("" + a.key) : b.toString(36);
+  return "object" === typeof a && null !== a && null != a.key ? escape$1("" + a.key) : b.toString(36);
 }
 function R$1(a, b, e, d, c) {
   var k2 = typeof a;
@@ -7649,6 +7669,375 @@ const useStore = create()(
   )
 );
 const getSelectedRubric = (state) => state.rubrics.find((r2) => r2.id === state.selectedRubricId) ?? null;
+function inferSuggestedUseCases(model) {
+  const cases = [];
+  const name = model.displayName.toLowerCase();
+  const size = model.size / 1e9;
+  if (size >= 7) {
+    cases.push("глубокий анализ текста", "сложная аргументация", "генерация текста");
+  } else if (size >= 3) {
+    cases.push("оценка студенческих работ", "анализ по критериям", "проверка структуры");
+  } else {
+    cases.push("быстрая проверка", "простые формальные критерии", "оформление");
+  }
+  if (name.includes("qwen") || name.includes(" llama")) {
+    cases.push("логический анализ", "резюмирование");
+  }
+  if (name.includes("math") || name.includes("code")) {
+    cases.push("технические расчёты", "программирование");
+  }
+  return cases;
+}
+function describeModel(model) {
+  return {
+    fileName: model.fileName,
+    displayName: model.displayName,
+    sizeLabel: model.sizeLabel,
+    capability: model.capability,
+    suggestedUseCases: inferSuggestedUseCases(model)
+  };
+}
+function buildModelsDescription(models) {
+  if (models.length === 0) return "Модели не обнаружены.";
+  const sorted = [...models].sort((a, b) => b.capability - a.capability);
+  const lines = ["ДОСТУПНЫЕ МОДЕЛИ:"];
+  for (const m2 of sorted) {
+    const desc = describeModel(m2);
+    lines.push(
+      `
+${desc.displayName}`,
+      `  Файл: ${desc.fileName}`,
+      `  Размер: ${desc.sizeLabel} (~${desc.capability}/100 capability)`,
+      `  Рекомендуется для: ${desc.suggestedUseCases.join(", ")}`
+    );
+  }
+  return lines.join("\n");
+}
+function findClosestModel(models, targetCapability) {
+  const sorted = [...models].sort((a, b) => b.capability - a.capability);
+  let closest = sorted[0];
+  let minDiff = Math.abs(closest.capability - targetCapability);
+  for (const m2 of sorted) {
+    const diff = Math.abs(m2.capability - targetCapability);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closest = m2;
+    }
+  }
+  return closest;
+}
+function formatSize(bytes) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${bytes} B`;
+}
+function formatDisplayName(fileName) {
+  return fileName.replace(/\.gguf$/i, "").replace(/[-_]/g, " ").replace(/\b(q\d+[_ ]?[a-z]+\d*|iq\d+[_ ]?[a-z]+\d*)\b/gi, "").replace(/\s{2,}/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+function estimateCapability(sizeBytes) {
+  const gb2 = sizeBytes / 1e9;
+  if (gb2 >= 35) return 100;
+  if (gb2 >= 18) return 90;
+  if (gb2 >= 10) return 80;
+  if (gb2 >= 6) return 70;
+  if (gb2 >= 3) return 58;
+  if (gb2 >= 1.5) return 46;
+  return 35;
+}
+function parseModels(raw) {
+  return raw.map((m2) => ({
+    ...m2,
+    sizeLabel: formatSize(m2.size),
+    displayName: formatDisplayName(m2.fileName),
+    capability: estimateCapability(m2.size)
+  })).sort((a, b) => b.size - a.size);
+}
+function analyzeContent(text) {
+  const preview = text.substring(0, 8e3).toLowerCase();
+  const words = preview.split(/\s+/).filter((w2) => w2.length > 2);
+  const sentences = text.substring(0, 8e3).split(/[.!?]+/).filter((s) => s.trim().length > 10);
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  const techMarkers = [
+    "алгоритм",
+    "функци",
+    "формул",
+    "уравнени",
+    "матриц",
+    "вектор",
+    "программ",
+    "база данных",
+    "сервер",
+    "протокол",
+    "интерфейс",
+    "микроконтроллер",
+    "реакци",
+    "молекул",
+    "атом",
+    "лаборатор",
+    "эксперимент",
+    "теорем",
+    "доказательств",
+    "интеграл",
+    "производн",
+    "дифференциал",
+    "нейронн",
+    "компилятор",
+    "архитектур",
+    "байт",
+    "процессор",
+    "физическ",
+    "химическ",
+    "математическ",
+    "биологическ",
+    "технологическ"
+  ];
+  const humMarkers = [
+    "общество",
+    "культур",
+    "историческ",
+    "философ",
+    "социальн",
+    "политическ",
+    "психологическ",
+    "педагогическ",
+    "лингвистическ",
+    "литератур",
+    "искусств",
+    "этическ",
+    "моральн",
+    "правов",
+    "юридическ",
+    "гуманитарн",
+    "антропологи",
+    "религи",
+    "идеологи"
+  ];
+  const busMarkers = [
+    "рынок",
+    "прибыль",
+    "доход",
+    "расход",
+    "бюджет",
+    "инвестиц",
+    "маркетинг",
+    "менеджмент",
+    "предприяти",
+    "организаци",
+    "управлени",
+    "бизнес",
+    "финансов",
+    "экономическ",
+    "конкурент",
+    "стратеги"
+  ];
+  const techHits = techMarkers.filter((m2) => preview.includes(m2)).length;
+  const humHits = humMarkers.filter((m2) => preview.includes(m2)).length;
+  const busHits = busMarkers.filter((m2) => preview.includes(m2)).length;
+  const avgSentenceLen = sentences.length > 0 ? words.length / sentences.length : 15;
+  const sentComplexity = Math.min(1, avgSentenceLen / 25);
+  const techDensity = Math.min(1, techHits / 4);
+  const complexity = Math.min(1, sentComplexity * 0.5 + techDensity * 0.5);
+  const hasTechnical = techHits >= 2 && techHits >= humHits && techHits >= busHits;
+  const hasHumanities = humHits >= 2 && humHits > techHits && humHits >= busHits;
+  const hasBusiness = busHits >= 2 && busHits > techHits && busHits > humHits;
+  let domain = "mixed";
+  if (hasTechnical) domain = "technical";
+  else if (hasHumanities) domain = "humanities";
+  else if (hasBusiness) domain = "business";
+  return { complexity, domain, hasTechnical, hasHumanities, hasBusiness, wordCount, avgSentenceLen };
+}
+function criterionScore(criterion, content) {
+  const text = `${criterion.name} ${criterion.description}`.toLowerCase();
+  const highMarkers = [
+    "оригинальность",
+    "уникальность",
+    "качество содержания",
+    "глубина",
+    "аргументац",
+    "анализ",
+    "критическ",
+    "синтез",
+    "логик",
+    "концепц",
+    "обоснован",
+    "теоретическ",
+    "научн",
+    "методолог"
+  ];
+  const lowMarkers = [
+    "оформление",
+    "форматирование",
+    "грамотность",
+    "соответствие требованиям",
+    "орфограф",
+    "пунктуац"
+  ];
+  const highHits = highMarkers.filter((k2) => text.includes(k2)).length;
+  const lowHits = lowMarkers.filter((k2) => text.includes(k2)).length;
+  let base;
+  if (highHits > lowHits) base = Math.min(0.85, 0.55 + highHits * 0.1);
+  else if (lowHits > highHits) base = Math.max(0.2, 0.45 - lowHits * 0.1);
+  else base = 0.5;
+  if (!content) return base;
+  let boost = 0;
+  if (content.hasTechnical) {
+    if (/качество|глубина|содержани|анализ|точность|методолог|правильность/.test(text)) boost += 0.15;
+    if (/корректность|обоснован|научн/.test(text)) boost += 0.1;
+  }
+  if (content.hasHumanities) {
+    if (/аргумент|логик|рассуждени|доказательств/.test(text)) boost += 0.12;
+    if (/оригинальн|авторск|стиль/.test(text)) boost += 0.1;
+  }
+  if (content.hasBusiness) {
+    if (/вывод|рекоменд|практическ|применени/.test(text)) boost += 0.1;
+    if (/анализ|оценк|эффективн/.test(text)) boost += 0.08;
+  }
+  if (content.wordCount > 3e3) {
+    if (/структур|логик|последовательн|связность/.test(text)) boost += 0.08;
+  }
+  boost += content.complexity * 0.08;
+  return Math.min(0.95, base + boost);
+}
+function assignModels(models, criteria, fileContent) {
+  const sorted = [...models].sort((a, b) => b.capability - a.capability);
+  const assignment = /* @__PURE__ */ new Map();
+  if (sorted.length === 1) {
+    for (const c of criteria) assignment.set(c.id, sorted[0]);
+    return assignment;
+  }
+  const content = fileContent ? analyzeContent(fileContent) : void 0;
+  const byScore = [...criteria].map((c) => ({ criterion: c, score: criterionScore(c, content) })).sort((a, b) => b.score - a.score);
+  for (let i = 0; i < byScore.length; i++) {
+    assignment.set(byScore[i].criterion.id, sorted[i % sorted.length]);
+  }
+  return assignment;
+}
+function uniqueModelNames(assignment) {
+  return [...new Set([...assignment.values()].map((m2) => m2.displayName))];
+}
+class CircuitBreaker {
+  failures = 0;
+  lastFailureTime = 0;
+  state = "closed";
+  failureThreshold;
+  resetTimeout;
+  halfOpenAttempts;
+  halfOpenSuccesses = 0;
+  constructor(failureThreshold = 5, resetTimeout = 6e4, halfOpenAttempts = 2) {
+    this.failureThreshold = failureThreshold;
+    this.resetTimeout = resetTimeout;
+    this.halfOpenAttempts = halfOpenAttempts;
+  }
+  async execute(fn) {
+    if (this.state === "open") {
+      if (Date.now() - this.lastFailureTime > this.resetTimeout) {
+        this.state = "half-open";
+        this.halfOpenSuccesses = 0;
+      } else {
+        throw new Error("Circuit breaker OPEN: too many failures, retry later");
+      }
+    }
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (error) {
+      this.onFailure();
+      throw error;
+    }
+  }
+  onSuccess() {
+    if (this.state === "half-open") {
+      this.halfOpenSuccesses++;
+      if (this.halfOpenSuccesses >= this.halfOpenAttempts) {
+        this.reset();
+      }
+    } else {
+      this.failures = 0;
+    }
+  }
+  onFailure() {
+    this.failures++;
+    this.lastFailureTime = Date.now();
+    if (this.state === "half-open") {
+      this.state = "open";
+    } else if (this.failures >= this.failureThreshold) {
+      this.state = "open";
+    }
+  }
+  reset() {
+    this.state = "closed";
+    this.failures = 0;
+    this.halfOpenSuccesses = 0;
+  }
+  getState() {
+    return this.state;
+  }
+}
+let globalCircuitBreaker = null;
+function getCircuitBreaker() {
+  if (!globalCircuitBreaker) {
+    globalCircuitBreaker = new CircuitBreaker(5, 6e4, 2);
+  }
+  return globalCircuitBreaker;
+}
+function classifyError(error) {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (error instanceof DOMException && error.name === "AbortError") return "timeout";
+  if (msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND") || msg.includes("fetch")) return "network";
+  if (/5\d{2}/.test(msg)) return "server";
+  if (/4\d{2}/.test(msg)) return "client";
+  return "unknown";
+}
+function getRetryDelay(attempt, errorType) {
+  const baseDelay = errorType === "network" ? 5e3 : 3e3;
+  const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt - 1), 3e4);
+  const jitter = Math.random() * 1e3;
+  return exponentialDelay + jitter;
+}
+async function waitForServerReady(url, timeoutMs = 6e4) {
+  const start = Date.now();
+  const checkInterval = 3e3;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${url}/v1/models`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5e3)
+      });
+      if (res.ok) return true;
+    } catch {
+    }
+    await new Promise((r2) => setTimeout(r2, checkInterval));
+  }
+  return false;
+}
+function getModelParams(capability) {
+  if (capability < 40) {
+    return {
+      contextLimit: 800,
+      maxTokens: 200,
+      temperature: 0.05,
+      useFewShot: false,
+      promptComplexity: "minimal"
+    };
+  }
+  if (capability < 60) {
+    return {
+      contextLimit: 1200,
+      maxTokens: 300,
+      temperature: 0.1,
+      useFewShot: true,
+      promptComplexity: "standard"
+    };
+  }
+  return {
+    contextLimit: 1800,
+    maxTokens: 400,
+    temperature: 0.15,
+    useFewShot: true,
+    promptComplexity: "detailed"
+  };
+}
 async function fetchModels(baseUrl) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 5e3);
@@ -7668,41 +8057,67 @@ async function fetchModels(baseUrl) {
   }
 }
 async function callLLM(config, prompt, opts = {}) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3e5);
-  const startTime = Date.now();
+  const timeoutMs = 3e5;
+  const maxRetries = 3;
+  let lastError = null;
+  const circuitBreaker = getCircuitBreaker();
   const messages = [
     { role: "user", content: prompt }
   ];
   if (opts.assistantPrefix) {
     messages.push({ role: "assistant", content: opts.assistantPrefix });
   }
-  try {
-    const res = await fetch(`${config.url}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        model: config.modelId,
-        messages,
-        temperature: opts.temperature ?? config.temperature,
-        max_tokens: opts.maxTokens ?? config.maxTokens,
-        ...opts.stop ? { stop: opts.stop } : {}
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`HTTP ${res.status}: ${errText}`);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    let lastErrorType = "unknown";
+    try {
+      const result = await circuitBreaker.execute(async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const startTime = Date.now();
+        try {
+          const res = await fetch(`${config.url}/v1/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({
+              model: config.modelId,
+              messages,
+              temperature: opts.temperature ?? config.temperature,
+              max_tokens: opts.maxTokens ?? config.maxTokens,
+              ...opts.stop ? { stop: opts.stop } : {}
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`HTTP ${res.status}: ${errText}`);
+          }
+          const data = await res.json();
+          const content = data.choices[0].message.content;
+          const text = opts.assistantPrefix ? opts.assistantPrefix + content : content;
+          return { text, durationMs: Date.now() - startTime };
+        } catch (e) {
+          clearTimeout(timeoutId);
+          throw e;
+        }
+      });
+      return result;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      lastErrorType = classifyError(lastError);
+      const circuitBreakerState = circuitBreaker.getState();
+      if (circuitBreakerState === "open") {
+        config.onLog?.(`Circuit breaker OPEN: слишком много ошибок. Подождите и попробуйте позже.`, "error");
+        throw lastError;
+      }
+      if (attempt < maxRetries) {
+        const delay = getRetryDelay(attempt, lastErrorType);
+        config.onLog?.(`Попытка ${attempt} не удалась (${lastErrorType}): ${lastError.message}. Повтор через ${Math.round(delay / 1e3)} сек...`, "warning");
+        await new Promise((r2) => setTimeout(r2, delay));
+      }
     }
-    const data = await res.json();
-    const content = data.choices[0].message.content;
-    const text = opts.assistantPrefix ? opts.assistantPrefix + content : content;
-    return { text, durationMs: Date.now() - startTime };
-  } catch (e) {
-    clearTimeout(timeoutId);
-    throw e;
   }
+  throw lastError || new Error("Ошибка вызова LLM после всех попыток");
 }
 function extractJSON(text) {
   try {
@@ -7727,11 +8142,264 @@ function extractJSON(text) {
   }
   throw new Error("JSON не найден в ответе модели");
 }
+async function runPlanner(config, rubric, contentPreview, models) {
+  const rubricBlock = rubric.criteria.map(
+    (c) => `- ${c.name} (макс ${c.maxScore} балл., вес ${c.weight}%): ${c.description}`
+  ).join("\n");
+  const modelsBlock = models && models.length > 0 ? buildModelsDescription(models) : "Модели не переданы — выбери модель на основе описания работы.";
+  const sortedModels = models ? [...models].sort((a, b) => b.capability - a.capability) : [];
+  const firstModelName = sortedModels[0]?.fileName || "default";
+  const examplesBlock = `
+ПРИМЕР ОПТИМАЛЬНОГО ПЛАНА (для понимания формата):
+Критерии: [Глубина анализа, Оформление, Логика, Оригинальность]
+Модели: [7B-сильная, 3B-быстрая]
+
+ОПТИМАЛЬНЫЙ ПОРЯДОК:
+1. Шаг 1: "Оформление" → 3B → isModelSwitch=false (первая модель)
+2. Шаг 2: "Оригинальность" → 3B → isModelSwitch=false (та же модель)
+3. Шаг 3: "Логика" → 7B → isModelSwitch=true (переключение)
+4. Шаг 4: "Глубина анализа" → 7B → isModelSwitch=false (та же модель)
+
+Почему такой порядок? Сгруппировали все критерии с 3B вместе, потом 7B.
+Переключений: 2 (минимум)
+---`;
+  const prompt = `Ты — умный планировщик проверки студенческих работ. Твоя задача — составить ОПТИМАЛЬНЫЙ план выполнения.
+
+${examplesBlock}
+
+КОНКРЕТНАЯ РАБОТА ДЛЯ АНАЛИЗА:
+${modelsBlock}
+
+РУБРИКА ОЦЕНКИ:
+${rubricBlock}
+
+ТЕКСТ РАБОТЫ (первые 2000 символов):
+${contentPreview.substring(0, 2e3)}
+
+═══════════════════════════════════════════════════════════════
+ЗАДАНИЕ:
+═══════════════════════════════════════════════════════════════
+
+Для КАЖДОГО критерия:
+1. Оцени СЛОЖНОСТЬ: low (простые задачи) / medium / high (сложный анализ)
+2. Выбери ПОДХОДЯЩУЮ модель из списка
+3. Вычисли ПАРАМЕТРЫ для этой модели:
+   - contextLimit: 800 (маленькие модели) / 1200 (средние) / 1800 (большие)
+   - useFewShot: false (маленькие) / true (большие)
+4. Создай ПРОМТ для оценки
+
+═══════════════════════════════════════════════════════════════
+ПРАВИЛА ОПТИМАЛЬНОГО ПЛАНИРОВАНИЯ:
+═══════════════════════════════════════════════════════════════
+
+1. ПЕРВЫЙ ШАГ — используй самую мощную модель (для планировщика она уже загружена)
+2. ГРУППИРУЙ критерии по модели: все с одной моделью — вместе
+3. МИНИМИЗИРУЙ переключения: если модель A нужна для шагов 1 и 3, а B для шага 2 — сначала A (шаг 1), потом B (шаг 2), потом A (шаг 3)
+4. ПЕРВЫЙ шаг каждой группы должен иметь isModelSwitch=false (модель уже загружена)
+5. СЛЕДУЮЩИЕ шаги с той же моделью — isModelSwitch=false
+6. ПЕРВЫЙ шаг с НОВОЙ моделью — isModelSwitch=true
+
+═══════════════════════════════════════════════════════════════
+ВЫБОР МОДЕЛИ:
+═══════════════════════════════════════════════════════════════
+
+- high сложность → самая мощная модель (capability 70+)
+- medium сложность → модель capability 40-70
+- low сложность → любая модель, но быстрая лучше
+
+═══════════════════════════════════════════════════════════════
+ФОРМАТ ОТВЕТА (JSON):
+═══════════════════════════════════════════════════════════════
+
+{
+  "recommendedFirstModel": "имя файла первой модели (самая мощная)",
+  "estimatedSwitches": число,
+  "steps": [
+    {
+      "step": 1,
+      "criterion": "ТОЧНО название критерия из рубрики",
+      "criterionId": "id критерия из рубрики",
+      "recommendedModel": "имя файла модели",
+      "modelRationale": "1-2 предложения почему выбрана эта модель",
+      "complexity": "low|medium|high",
+      "isModelSwitch": false,
+      "contextLimit": 1200,
+      "maxTokens": 300,
+      "temperature": 0.1,
+      "useFewShot": true,
+      "promptComplexity": "minimal|standard|detailed",
+      "prompt": "Детальный промт для эксперта: что проверять, критерии оценки"
+    }
+  ]
+}`;
+  const { text: response } = await callLLM(config, prompt, { maxTokens: 3500, temperature: 0.3 });
+  try {
+    const rawPlan = extractJSON(response);
+    if (rawPlan && typeof rawPlan === "object" && "steps" in rawPlan) {
+      const planData = rawPlan;
+      const steps = planData.steps.map((item, index) => {
+        const criterionName = String(item.criterion || "");
+        const rubricCriterion = rubric.criteria.find((c) => c.name === criterionName);
+        const modelName = String(item.recommendedModel || firstModelName);
+        const model = models?.find((m2) => m2.fileName === modelName);
+        const capability = model?.capability || 50;
+        const params = getModelParams(capability);
+        return {
+          criterion: criterionName,
+          criterionId: rubricCriterion?.id || String(index),
+          prompt: String(item.prompt || ""),
+          maxScore: rubricCriterion?.maxScore || Number(item.maxScore) || 10,
+          recommendedModel: modelName,
+          modelRationale: String(item.modelRationale || "Модель выбрана планировщиком"),
+          complexity: item.complexity || "medium",
+          step: Number(item.step) || index + 1,
+          isModelSwitch: Boolean(item.isModelSwitch),
+          contextLimit: Number(item.contextLimit) || params.contextLimit,
+          maxTokens: Number(item.maxTokens) || params.maxTokens,
+          temperature: Number(item.temperature) || params.temperature,
+          useFewShot: item.useFewShot !== void 0 ? Boolean(item.useFewShot) : params.useFewShot,
+          promptComplexity: item.promptComplexity || params.promptComplexity
+        };
+      });
+      const estimatedSwitches = Number(planData.estimatedSwitches) || steps.filter((s) => s.isModelSwitch).length;
+      const recommendedFirstModel = String(planData.recommendedFirstModel || firstModelName);
+      config.onLog(`Планировщик: ${steps.length} шагов, ~${estimatedSwitches} переключений модели`, "success");
+      return { steps, estimatedSwitches, recommendedFirstModel };
+    }
+    throw new Error("Некорректная структура плана");
+  } catch (e) {
+    config.onLog("Планировщик: ошибка парсинга, создаю базовый план", "warning");
+    const defaultModel = sortedModels[0]?.fileName || "default";
+    const defaultCapability = sortedModels[0]?.capability || 50;
+    const defaultParams = getModelParams(defaultCapability);
+    const steps = rubric.criteria.map((c, i) => ({
+      criterion: c.name,
+      criterionId: c.id,
+      prompt: `Оцени критерий "${c.name}" (${c.description}). Выстави оценку от 0 до ${c.maxScore}.`,
+      maxScore: c.maxScore,
+      recommendedModel: defaultModel,
+      modelRationale: "Модель по умолчанию",
+      complexity: "medium",
+      step: i + 1,
+      isModelSwitch: i === 0 ? false : true,
+      contextLimit: defaultParams.contextLimit,
+      maxTokens: defaultParams.maxTokens,
+      temperature: defaultParams.temperature,
+      useFewShot: defaultParams.useFewShot,
+      promptComplexity: defaultParams.promptComplexity
+    }));
+    return {
+      steps,
+      estimatedSwitches: steps.length - 1,
+      recommendedFirstModel: defaultModel
+    };
+  }
+}
+const FEW_SHOT_EXAMPLES = [
+  // ОТЛИЧНО (9-10/10)
+  {
+    criterionName: "Раскрытие темы",
+    criterionDescription: "Полнота и глубина раскрытия основной темы работы",
+    workExcerpt: "В работе детально анализируются причины глобального потепления: антропогенные факторы (сжигание ископаемого топлива даёт 75% выбросов CO2), промышленные выбросы метана, вырубка лесов. Приведены данные IPCC за 2023 год, конкретные примеры последствий для экосистем Арктики и коралловых рифов.",
+    score: 9,
+    maxScore: 10,
+    qualityLevel: "excellent",
+    justification: "Работа демонстрирует глубокое понимание темы. Автор использует научные данные, проводит анализ причин и последствий, приводит конкретные примеры. Материал изложен логично и систематизирован.",
+    recommendations: "Работа выполнена на высоком уровне. Для совершенства можно добавить больше первичных источников и собственные наблюдения."
+  },
+  // ХОРОШО (6-7/10)
+  {
+    criterionName: "Раскрытие темы",
+    criterionDescription: "Полнота и глубина раскрытия основной темы работы",
+    workExcerpt: "В реферате рассматривается проблема загрязнения окружающей среды. Автор описывает основные виды загрязнений: воздуха, воды, почвы. Упоминает отдельные примеры негативного воздействия на природу.",
+    score: 6,
+    maxScore: 10,
+    qualityLevel: "good",
+    justification: "Тема раскрыта в общих чертах. Автор знаком с основными аспектами проблемы, но ограничивается описанием без глубокого анализа. Не хватает конкретных данных, статистики, причинно-следственных связей.",
+    recommendations: "Добавить конкретные цифры и статистику. Углубить анализ причинно-следственных связей. Рассмотреть меньше тем, но раскрыть их более подробно."
+  },
+  // УДОВЛЕТВОРИТЕЛЬНО (4-5/10)
+  {
+    criterionName: "Раскрытие темы",
+    criterionDescription: "Полнота и глубина раскрытия основной темы работы",
+    workExcerpt: "В работе рассматривается тема загрязнения. Автор в общих чертах описывает, что загрязнение плохо для природы. Упоминает несколько терминов без объяснения их значения.",
+    score: 4,
+    maxScore: 10,
+    qualityLevel: "satisfactory",
+    justification: 'Работа носит поверхностный характер. Автор не раскрывает суть проблемы, ограничивается общими фразами типа "загрязнение вредит природе". Отсутствует научная терминология и анализ.',
+    recommendations: "Изучить предметную область более глубоко. Использовать научные источники вместо популярных статей. Объяснять специальные термины. Добавить структуру и логику изложения."
+  },
+  // ПЛОХО (2-3/10)
+  {
+    criterionName: "Раскрытие темы",
+    criterionDescription: "Полнота и глубина раскрытия основной темы работы",
+    workExcerpt: "Экология это когда природу загрязняют. Надо её защищать. В работе говорится о том что люди должны беречь природу.",
+    score: 2,
+    maxScore: 10,
+    qualityLevel: "poor",
+    justification: "Работа не раскрывает тему. Отсутствует какое-либо содержательное наполнение, нет определений, примеров, анализа. Текст представляет собой набор общих фраз без конкретики.",
+    recommendations: "Кардинально переработать содержание. Изучить основы темы по учебникам и научным источникам. Начать с определений и базовых понятий. Обязательно использовать источники информации."
+  },
+  // ЛОГИЧНОСТЬ - ХОРОШО
+  {
+    criterionName: "Логичность изложения",
+    criterionDescription: "Структурированность текста, наличие переходов между разделами, отсутствие противоречий",
+    workExcerpt: "Введение формулирует цели работы. Затем последовательно рассматриваются причины, виды загрязнений и способы решения проблемы. Каждый раздел логически связан с предыдущим. Выводы соответствуют поставленным целям.",
+    score: 8,
+    maxScore: 10,
+    qualityLevel: "good",
+    justification: "Работа имеет чёткую логическую структуру. Прослеживается последовательность: проблема → анализ → решение. Используются связующие конструкции между разделами.",
+    recommendations: "Хорошая работа. Можно усилить переходы между отдельными абзацами внутри разделов."
+  },
+  // ЛОГИЧНОСТЬ - ПЛОХО
+  {
+    criterionName: "Логичность изложения",
+    criterionDescription: "Структурированность текста, наличие переходов между разделами, отсутствие противоречий",
+    workExcerpt: "Сначала автор пишет о важности экологии. Затем резко переходит к истории промышленной революции. Далее снова возвращается к экологии, но без связи с предыдущим материалом. Встречаются внутренние противоречия в аргументации.",
+    score: 3,
+    maxScore: 10,
+    qualityLevel: "poor",
+    justification: "Работа имеет серьёзные логические проблемы: отсутствуют переходы между темами, нет связности изложения, присутствуют внутренние противоречия. Создаётся впечатление набора разрозненных фактов.",
+    recommendations: "Составить план работы и следовать ему. Добавлять связующие фразы между абзацами. Проверить, что каждый раздел логически вытекает из предыдущего. Убрать противоречия в аргументации."
+  }
+];
+function buildFewShotBlock(criterionName, criterionDescription, useExamples = true) {
+  if (!useExamples) return "";
+  const relevantExamples = FEW_SHOT_EXAMPLES.filter(
+    (ex) => ex.criterionName.toLowerCase().includes(criterionName.toLowerCase().split(" ")[0])
+  );
+  const selectedExamples = relevantExamples.slice(0, 2);
+  if (selectedExamples.length === 0) return "";
+  return selectedExamples.map((ex, i) => {
+    const levelLabel = {
+      excellent: "ОТЛИЧНО",
+      good: "ХОРОШО",
+      satisfactory: "УДОВЛЕТВОРИТЕЛЬНО",
+      poor: "ПЛОХО"
+    }[ex.qualityLevel];
+    return `
+ПРИМЕР ${i + 1} (${levelLabel} — ${ex.score}/${ex.maxScore}):
+Критерий: ${ex.criterionName}
+Что проверяем: ${ex.criterionDescription}
+Текст работы:
+${ex.workExcerpt}
+
+Оценка эксперта:
+Балл: ${ex.score}/${ex.maxScore}
+Обоснование: ${ex.justification}
+Рекомендации: ${ex.recommendations}
+---`;
+  }).join("\n");
+}
 async function evaluateCriterion(config, criterion, _planItem, fileContent) {
   const preview = fileContent.substring(0, 1800);
   const sourcesBlock = config.sources && config.sources.length > 0 ? "\nСправочный материал:\n" + config.sources.map((s) => `• ${s.name}: ${s.content.substring(0, 400)}`).join("\n") + "\n" : "";
-  const prompt = `Ты проверяешь студенческую работу по одному критерию.
+  const fewShotBlock = buildFewShotBlock(criterion.name, criterion.description, true);
+  const prompt = `Ты — строгий эксперт по проверке студенческих работ. Твоя задача — объективно оценить работу по критерию.
 
+${fewShotBlock}
+
+ТЕКУЩАЯ РАБОТА ДЛЯ ПРОВЕРКИ:
 Критерий: ${criterion.name}
 Что проверяем: ${criterion.description}
 Максимум баллов: ${criterion.maxScore}
@@ -7739,18 +8407,29 @@ ${sourcesBlock}
 Текст работы студента:
 ${preview}
 
-Напиши оценку строго в таком формате (без лишних слов):
-Балл: [число от 0 до ${criterion.maxScore}]
-Обоснование: [конкретно о данной работе — что выполнено хорошо и что плохо]
-Улучшить: [2-3 пронумерованных шага: 1) что именно добавить/переработать; 2) что изучить/исправить. Если выше есть справочный материал — сошлись на него]`;
+ЗАДАНИЕ:
+1) Внимательно изучи текст работы
+2) Сравни с примерами выше — насколько работа соответствует каждому уровню
+3) Выстави объективную оценку
+
+ШКАЛА ОЦЕНКИ:
+- 9-10/10: Отличная работа, все требования выполнены, высокое качество
+- 6-8/10: Хорошая работа, есть мелкие недочёты
+- 4-5/10: Удовлетворительно, видны существенные недостатки
+- 2-3/10: Неудовлетворительно, много серьёзных ошибок
+- 0-1/10: Критически плохо, работа не соответствует требованиям
+
+ФОРМАТ ОТВЕТА (только эти строки):
+Балл: [число]
+Обоснование: [конкретно: что сделано хорошо, что плохо]
+Улучшить: [1-2 совета по улучшению]`;
   const ANCHOR = "Балл: ";
   let result;
   let status = "ok";
   try {
     result = await callLLM(config, prompt, {
-      maxTokens: 350,
-      temperature: 0.15,
-      // low temperature → consistent, factual output
+      maxTokens: 400,
+      temperature: 0.1,
       assistantPrefix: ANCHOR,
       stop: ["\n\nКритерий", "\n\nТекст", "\n\nНапиши", "---", "Задача:"]
     });
@@ -7777,8 +8456,8 @@ function parseModelResponse(raw, criterion) {
       weightedScore: Math.round(n2 * (criterion.weight / 100) * 10) / 10,
       justification: (justification || "").trim() || genJustification(s, criterion),
       recommendations: (recommendations || "").trim() || genRecommendation(s, criterion),
-      strengths: [],
-      weaknesses: []
+      strengths: extractStrengths(justification),
+      weaknesses: extractWeaknesses(justification)
     };
   };
   const scoreRx = /(?:^|\n)\s*[Бб]алл\s*[:\-–—]\s*(\d+(?:\.\d+)?)/;
@@ -7803,13 +8482,25 @@ function parseModelResponse(raw, criterion) {
     }
   } catch {
   }
+  const analysisSection = raw.match(/(?:Анализ|Разбор)[:\s]+([\s\S]+?)(?=\n\s*(?:Балл|Шаг|$))/i);
+  const analysisLines = analysisSection?.[1]?.split("\n").filter((l2) => l2.trim()) || [];
+  const analysisScoreM = raw.match(/(?:Балл|Оценка)[:\s]+(\d+(?:\.\d+)?)\s*\/\s*(\d+)/);
+  if (analysisScoreM) {
+    const score2 = parseFloat(analysisScoreM[1]);
+    const recM2 = raw.match(/(?:Улучшить|[Рр]екоменд)[:\s]+([\s\S]+)$/i);
+    const justification = analysisLines.join(" ").substring(0, 500);
+    const recommendations = recM2 ? recM2[1].replace(/\n/g, " ").trim().substring(0, 350) : "";
+    return build2(score2, justification, recommendations);
+  }
   const scorePatterns = [
-    /(\d+(?:\.\d+)?)\s*\/\s*\d+/,
-    // 7/10
+    /(\d+(?:\.\d+)?)\s*\/\s*(\d+)/,
+    // 7/10 or 7/10
     /оценк[аи][:\s]+(\d+(?:\.\d+)?)/i,
     // оценка: 7
-    /^(\d+(?:\.\d+)?)\s*$/m
+    /(?:^|\n)\s*(\d+(?:\.\d+)?)\s*$/m,
     // standalone number line
+    /(?:max|из)\s*(\d+(?:\.\d+)?)/i
+    // "из 10" pattern
   ];
   let score = criterion.maxScore * 0.5;
   for (const p2 of scorePatterns) {
@@ -7820,10 +8511,17 @@ function parseModelResponse(raw, criterion) {
         score = v2;
         break;
       }
+      if (m2[2]) {
+        const maxFromPattern = parseFloat(m2[2]);
+        if (maxFromPattern > 0 && maxFromPattern <= 20) {
+          score = Math.round(v2 / maxFromPattern * criterion.maxScore);
+          break;
+        }
+      }
     }
   }
   const clean = raw.replace(/```[\s\S]*?```/g, "").replace(/\{[\s\S]*?\}/g, "").replace(/\s{2,}/g, " ").trim();
-  const sentences = clean.split(/(?<=[.!?])\s+/);
+  const sentences = clean.split(/(?<=[.!?])\s+/).filter((s) => s.length > 10);
   const recStart = sentences.findIndex((s) => /рекоменд|улучш|следует|нужно|необходимо/i.test(s));
   let just;
   let rec;
@@ -7836,6 +8534,55 @@ function parseModelResponse(raw, criterion) {
     rec = sentences.slice(mid).join(" ");
   }
   return build2(score, just.substring(0, 500), rec.substring(0, 350));
+}
+function extractStrengths(text, criterion) {
+  const strengths = [];
+  const positiveMarkers = [
+    "хорош",
+    "отличн",
+    "грамотн",
+    "полност",
+    "логичн",
+    "структуриров",
+    "правильн",
+    "глубок",
+    "детальн",
+    "аргументиров",
+    "содержательн",
+    "соответств",
+    "выполнен",
+    "раскрыт",
+    "обоснова"
+  ];
+  for (const marker of positiveMarkers) {
+    const m2 = text.match(new RegExp(`[^.]*${marker}[^.]*\\.`, "gi"));
+    if (m2) strengths.push(...m2.slice(0, 1));
+  }
+  return [...new Set(strengths)].slice(0, 3);
+}
+function extractWeaknesses(text, criterion) {
+  const weaknesses = [];
+  const negativeMarkers = [
+    "недостат",
+    "слаб",
+    "отсутств",
+    "неполн",
+    "поверхност",
+    "ошибк",
+    "нарушен",
+    "несоответств",
+    "упрощен",
+    "нелогич",
+    "неструктуриров",
+    "отсутствует",
+    "не указан",
+    "не раскрыт"
+  ];
+  for (const marker of negativeMarkers) {
+    const m2 = text.match(new RegExp(`[^.]*${marker}[^.]*\\.`, "gi"));
+    if (m2) weaknesses.push(...m2.slice(0, 1));
+  }
+  return [...new Set(weaknesses)].slice(0, 3);
 }
 function genJustification(score, c) {
   const pct = score / c.maxScore;
@@ -8074,29 +8821,29 @@ const __vitePreload = function preload(baseModule, deps, importerUrl) {
         const isBaseRelative = !!importerUrl;
         if (isBaseRelative) {
           for (let i = links.length - 1; i >= 0; i--) {
-            const link22 = links[i];
-            if (link22.href === dep && (!isCss || link22.rel === "stylesheet")) {
+            const link2 = links[i];
+            if (link2.href === dep && (!isCss || link2.rel === "stylesheet")) {
               return;
             }
           }
         } else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) {
           return;
         }
-        const link2 = document.createElement("link");
-        link2.rel = isCss ? "stylesheet" : scriptRel;
+        const link = document.createElement("link");
+        link.rel = isCss ? "stylesheet" : scriptRel;
         if (!isCss) {
-          link2.as = "script";
+          link.as = "script";
         }
-        link2.crossOrigin = "";
-        link2.href = dep;
+        link.crossOrigin = "";
+        link.href = dep;
         if (cspNonce) {
-          link2.setAttribute("nonce", cspNonce);
+          link.setAttribute("nonce", cspNonce);
         }
-        document.head.appendChild(link2);
+        document.head.appendChild(link);
         if (isCss) {
           return new Promise((res, rej) => {
-            link2.addEventListener("load", res);
-            link2.addEventListener(
+            link.addEventListener("load", res);
+            link.addEventListener(
               "error",
               () => rej(new Error(`Unable to preload CSS for ${dep}`))
             );
@@ -8126,7 +8873,7 @@ const __vitePreload = function preload(baseModule, deps, importerUrl) {
 function commonjsRequire(path) {
   throw new Error('Could not dynamically require "' + path + '". Please configure the dynamicRequireTargets or/and ignoreDynamicRequires option of @rollup/plugin-commonjs appropriately for this require call to work.');
 }
-var pdf = { exports: {} };
+var pdf$1 = { exports: {} };
 const __viteBrowserExternal = {};
 const __viteBrowserExternal$1 = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
@@ -16394,17 +17141,17 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                 this.ctx.fillRect(0, 0, 1, 1);
                 this.compose();
               }
-              markPoint(tag2) {
+              markPoint(tag) {
               }
-              markPointProps(tag2, properties) {
+              markPointProps(tag, properties) {
               }
-              beginMarkedContent(tag2) {
+              beginMarkedContent(tag) {
                 this.markedContentStack.push({
                   visible: true
                 });
               }
-              beginMarkedContentProps(tag2, properties) {
-                if (tag2 === "OC") {
+              beginMarkedContentProps(tag, properties) {
+                if (tag === "OC") {
                   this.markedContentStack.push({
                     visible: this.optionalContentConfig.isVisible(properties)
                   });
@@ -20779,9 +21526,9 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                   this._container.append(textDiv);
                 }
                 if (textDivProperties.hasEOL) {
-                  const br2 = document.createElement("br");
-                  br2.setAttribute("role", "presentation");
-                  this._container.append(br2);
+                  const br = document.createElement("br");
+                  br.setAttribute("role", "presentation");
+                  this._container.append(br);
                 }
               }
               _render() {
@@ -22414,49 +23161,49 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                   data,
                   linkService
                 } = this;
-                const link2 = document.createElement("a");
-                link2.setAttribute("data-element-id", data.id);
+                const link = document.createElement("a");
+                link.setAttribute("data-element-id", data.id);
                 let isBound = false;
                 if (data.url) {
-                  linkService.addLinkAttributes(link2, data.url, data.newWindow);
+                  linkService.addLinkAttributes(link, data.url, data.newWindow);
                   isBound = true;
                 } else if (data.action) {
-                  this._bindNamedAction(link2, data.action);
+                  this._bindNamedAction(link, data.action);
                   isBound = true;
                 } else if (data.attachment) {
-                  this._bindAttachment(link2, data.attachment);
+                  this._bindAttachment(link, data.attachment);
                   isBound = true;
                 } else if (data.setOCGState) {
-                  this.#bindSetOCGState(link2, data.setOCGState);
+                  this.#bindSetOCGState(link, data.setOCGState);
                   isBound = true;
                 } else if (data.dest) {
-                  this._bindLink(link2, data.dest);
+                  this._bindLink(link, data.dest);
                   isBound = true;
                 } else {
                   if (data.actions && (data.actions.Action || data.actions["Mouse Up"] || data.actions["Mouse Down"]) && this.enableScripting && this.hasJSActions) {
-                    this._bindJSAction(link2, data);
+                    this._bindJSAction(link, data);
                     isBound = true;
                   }
                   if (data.resetForm) {
-                    this._bindResetFormAction(link2, data.resetForm);
+                    this._bindResetFormAction(link, data.resetForm);
                     isBound = true;
                   } else if (this.isTooltipOnly && !isBound) {
-                    this._bindLink(link2, "");
+                    this._bindLink(link, "");
                     isBound = true;
                   }
                 }
                 this.container.classList.add("linkAnnotation");
                 if (isBound) {
-                  this.container.append(link2);
+                  this.container.append(link);
                 }
                 return this.container;
               }
               #setInternalLink() {
                 this.container.setAttribute("data-internal-link", "");
               }
-              _bindLink(link2, destination) {
-                link2.href = this.linkService.getDestinationHash(destination);
-                link2.onclick = () => {
+              _bindLink(link, destination) {
+                link.href = this.linkService.getDestinationHash(destination);
+                link.onclick = () => {
                   if (destination) {
                     this.linkService.goToDestination(destination);
                   }
@@ -22466,39 +23213,39 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                   this.#setInternalLink();
                 }
               }
-              _bindNamedAction(link2, action) {
-                link2.href = this.linkService.getAnchorUrl("");
-                link2.onclick = () => {
+              _bindNamedAction(link, action) {
+                link.href = this.linkService.getAnchorUrl("");
+                link.onclick = () => {
                   this.linkService.executeNamedAction(action);
                   return false;
                 };
                 this.#setInternalLink();
               }
-              _bindAttachment(link2, attachment) {
-                link2.href = this.linkService.getAnchorUrl("");
-                link2.onclick = () => {
+              _bindAttachment(link, attachment) {
+                link.href = this.linkService.getAnchorUrl("");
+                link.onclick = () => {
                   this.downloadManager?.openOrDownloadData(this.container, attachment.content, attachment.filename);
                   return false;
                 };
                 this.#setInternalLink();
               }
-              #bindSetOCGState(link2, action) {
-                link2.href = this.linkService.getAnchorUrl("");
-                link2.onclick = () => {
+              #bindSetOCGState(link, action) {
+                link.href = this.linkService.getAnchorUrl("");
+                link.onclick = () => {
                   this.linkService.executeSetOCGState(action);
                   return false;
                 };
                 this.#setInternalLink();
               }
-              _bindJSAction(link2, data) {
-                link2.href = this.linkService.getAnchorUrl("");
+              _bindJSAction(link, data) {
+                link.href = this.linkService.getAnchorUrl("");
                 const map2 = /* @__PURE__ */ new Map([["Action", "onclick"], ["Mouse Up", "onmouseup"], ["Mouse Down", "onmousedown"]]);
                 for (const name of Object.keys(data.actions)) {
                   const jsName = map2.get(name);
                   if (!jsName) {
                     continue;
                   }
-                  link2[jsName] = () => {
+                  link[jsName] = () => {
                     this.linkService.eventBus?.dispatch("dispatcheventinsandbox", {
                       source: this,
                       detail: {
@@ -22509,25 +23256,25 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                     return false;
                   };
                 }
-                if (!link2.onclick) {
-                  link2.onclick = () => false;
+                if (!link.onclick) {
+                  link.onclick = () => false;
                 }
                 this.#setInternalLink();
               }
-              _bindResetFormAction(link2, resetForm) {
-                const otherClickAction = link2.onclick;
+              _bindResetFormAction(link, resetForm) {
+                const otherClickAction = link.onclick;
                 if (!otherClickAction) {
-                  link2.href = this.linkService.getAnchorUrl("");
+                  link.href = this.linkService.getAnchorUrl("");
                 }
                 this.#setInternalLink();
                 if (!this._fieldObjects) {
                   (0, _util2.warn)(`_bindResetFormAction - "resetForm" action not supported, ensure that the \`fieldObjects\` parameter is provided.`);
                   if (!otherClickAction) {
-                    link2.onclick = () => false;
+                    link.onclick = () => false;
                   }
                   return;
                 }
-                link2.onclick = () => {
+                link.onclick = () => {
                   otherClickAction?.();
                   const {
                     fields: resetFormFields,
@@ -24426,19 +25173,19 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
             exports$12.XfaLayer = void 0;
             var _xfa_text2 = __w_pdfjs_require__2(25);
             class XfaLayer {
-              static setupStorage(html2, id2, element, storage, intent) {
+              static setupStorage(html, id2, element, storage, intent) {
                 const storedData = storage.getValue(id2, {
                   value: null
                 });
                 switch (element.name) {
                   case "textarea":
                     if (storedData.value !== null) {
-                      html2.textContent = storedData.value;
+                      html.textContent = storedData.value;
                     }
                     if (intent === "print") {
                       break;
                     }
-                    html2.addEventListener("input", (event) => {
+                    html.addEventListener("input", (event) => {
                       storage.setValue(id2, {
                         value: event.target.value
                       });
@@ -24447,26 +25194,26 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                   case "input":
                     if (element.attributes.type === "radio" || element.attributes.type === "checkbox") {
                       if (storedData.value === element.attributes.xfaOn) {
-                        html2.setAttribute("checked", true);
+                        html.setAttribute("checked", true);
                       } else if (storedData.value === element.attributes.xfaOff) {
-                        html2.removeAttribute("checked");
+                        html.removeAttribute("checked");
                       }
                       if (intent === "print") {
                         break;
                       }
-                      html2.addEventListener("change", (event) => {
+                      html.addEventListener("change", (event) => {
                         storage.setValue(id2, {
                           value: event.target.checked ? event.target.getAttribute("xfaOn") : event.target.getAttribute("xfaOff")
                         });
                       });
                     } else {
                       if (storedData.value !== null) {
-                        html2.setAttribute("value", storedData.value);
+                        html.setAttribute("value", storedData.value);
                       }
                       if (intent === "print") {
                         break;
                       }
-                      html2.addEventListener("input", (event) => {
+                      html.addEventListener("input", (event) => {
                         storage.setValue(id2, {
                           value: event.target.value
                         });
@@ -24475,7 +25222,7 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                     break;
                   case "select":
                     if (storedData.value !== null) {
-                      html2.setAttribute("value", storedData.value);
+                      html.setAttribute("value", storedData.value);
                       for (const option of element.children) {
                         if (option.attributes.value === storedData.value) {
                           option.attributes.selected = true;
@@ -24484,7 +25231,7 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                         }
                       }
                     }
-                    html2.addEventListener("input", (event) => {
+                    html.addEventListener("input", (event) => {
                       const options = event.target.options;
                       const value = options.selectedIndex === -1 ? "" : options[options.selectedIndex].value;
                       storage.setValue(id2, {
@@ -24495,7 +25242,7 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                 }
               }
               static setAttributes({
-                html: html2,
+                html,
                 element,
                 storage = null,
                 intent,
@@ -24504,7 +25251,7 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                 const {
                   attributes
                 } = element;
-                const isHTMLAnchorElement = html2 instanceof HTMLAnchorElement;
+                const isHTMLAnchorElement = html instanceof HTMLAnchorElement;
                 if (attributes.type === "radio") {
                   attributes.name = `${attributes.name}-${intent}`;
                 }
@@ -24515,31 +25262,31 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                   switch (key) {
                     case "class":
                       if (value.length) {
-                        html2.setAttribute(key, value.join(" "));
+                        html.setAttribute(key, value.join(" "));
                       }
                       break;
                     case "dataId":
                       break;
                     case "id":
-                      html2.setAttribute("data-element-id", value);
+                      html.setAttribute("data-element-id", value);
                       break;
                     case "style":
-                      Object.assign(html2.style, value);
+                      Object.assign(html.style, value);
                       break;
                     case "textContent":
-                      html2.textContent = value;
+                      html.textContent = value;
                       break;
                     default:
                       if (!isHTMLAnchorElement || key !== "href" && key !== "newWindow") {
-                        html2.setAttribute(key, value);
+                        html.setAttribute(key, value);
                       }
                   }
                 }
                 if (isHTMLAnchorElement) {
-                  linkService.addLinkAttributes(html2, attributes.href, attributes.newWindow);
+                  linkService.addLinkAttributes(html, attributes.href, attributes.newWindow);
                 }
                 if (storage && attributes.dataId) {
-                  this.setupStorage(html2, attributes.dataId, element, storage);
+                  this.setupStorage(html, attributes.dataId, element, storage);
                 }
               }
               static render(parameters) {
@@ -24568,7 +25315,7 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                 }
                 const textDivs = [];
                 while (stack.length > 0) {
-                  const [parent, i, html2] = stack.at(-1);
+                  const [parent, i, html] = stack.at(-1);
                   if (i + 1 === parent.children.length) {
                     stack.pop();
                     continue;
@@ -24583,11 +25330,11 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
                   if (name === "#text") {
                     const node = document.createTextNode(child.value);
                     textDivs.push(node);
-                    html2.append(node);
+                    html.append(node);
                     continue;
                   }
                   const childHtml = child?.attributes?.xmlns ? document.createElementNS(child.attributes.xmlns, name) : document.createElement(name);
-                  html2.append(childHtml);
+                  html.append(childHtml);
                   if (child.attributes) {
                     this.setAttributes({
                       html: childHtml,
@@ -26100,8 +26847,13 @@ const require$$5 = /* @__PURE__ */ getAugmentedNamespace(__viteBrowserExternal$1
       })()
     );
   });
-})(pdf);
-var pdfExports = pdf.exports;
+})(pdf$1);
+var pdfExports = pdf$1.exports;
+const pdf_default = /* @__PURE__ */ getDefaultExportFromCjs(pdfExports);
+const pdf = /* @__PURE__ */ _mergeNamespaces({
+  __proto__: null,
+  default: pdf_default
+}, [pdfExports]);
 pdfExports.GlobalWorkerOptions.workerSrc = new URL("" + new URL("pdf.worker.min-DKQKFyKK.js", import.meta.url).href, import.meta.url).toString();
 const TEXT_EXTENSIONS = /* @__PURE__ */ new Set([
   "txt",
@@ -26175,7 +26927,7 @@ async function extractFromPDF(file) {
   return fullText.replace(/\s+/g, " ").replace(/\n\s*\n/g, "\n\n").trim();
 }
 async function extractFromDOCX(file) {
-  const mammoth = await __vitePreload(() => import("./index-DWCbcPW3.js").then((n2) => n2.i), true ? [] : void 0, import.meta.url);
+  const mammoth = await __vitePreload(() => import("./index-CSMnDSpy.js").then((n2) => n2.i), true ? __vite__mapDeps([0,1]) : void 0, import.meta.url);
   const arrayBuffer = await file.arrayBuffer();
   const result = await mammoth.extractRawText({ arrayBuffer });
   return result.value.replace(/\s+/g, " ").replace(/\n\s*\n/g, "\n\n").trim();
@@ -26352,7 +27104,7 @@ function FileUpload() {
       addLog(`Загрузка: ${file.name} (${formatFileSize(file.size)})`, "info");
       try {
         const content = await extractText(file);
-        loaded.push({ name: file.name, content });
+        loaded.push({ name: file.name, content, file });
         addLog(`Загружен: ${file.name} — ${content.length} символов`, "success");
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -26455,195 +27207,6 @@ function FileUpload() {
     ] })
   ] });
 }
-function formatSize(bytes) {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
-  return `${bytes} B`;
-}
-function formatDisplayName(fileName) {
-  return fileName.replace(/\.gguf$/i, "").replace(/[-_]/g, " ").replace(/\b(q\d+[_ ]?[a-z]+\d*|iq\d+[_ ]?[a-z]+\d*)\b/gi, "").replace(/\s{2,}/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
-}
-function estimateCapability(sizeBytes) {
-  const gb2 = sizeBytes / 1e9;
-  if (gb2 >= 35) return 100;
-  if (gb2 >= 18) return 90;
-  if (gb2 >= 10) return 80;
-  if (gb2 >= 6) return 70;
-  if (gb2 >= 3) return 58;
-  if (gb2 >= 1.5) return 46;
-  return 35;
-}
-function parseModels(raw) {
-  return raw.map((m2) => ({
-    ...m2,
-    sizeLabel: formatSize(m2.size),
-    displayName: formatDisplayName(m2.fileName),
-    capability: estimateCapability(m2.size)
-  })).sort((a, b) => b.size - a.size);
-}
-function analyzeContent(text) {
-  const preview = text.substring(0, 8e3).toLowerCase();
-  const words = preview.split(/\s+/).filter((w2) => w2.length > 2);
-  const sentences = text.substring(0, 8e3).split(/[.!?]+/).filter((s) => s.trim().length > 10);
-  const wordCount = text.split(/\s+/).filter(Boolean).length;
-  const techMarkers = [
-    "алгоритм",
-    "функци",
-    "формул",
-    "уравнени",
-    "матриц",
-    "вектор",
-    "программ",
-    "база данных",
-    "сервер",
-    "протокол",
-    "интерфейс",
-    "микроконтроллер",
-    "реакци",
-    "молекул",
-    "атом",
-    "лаборатор",
-    "эксперимент",
-    "теорем",
-    "доказательств",
-    "интеграл",
-    "производн",
-    "дифференциал",
-    "нейронн",
-    "компилятор",
-    "архитектур",
-    "байт",
-    "процессор",
-    "физическ",
-    "химическ",
-    "математическ",
-    "биологическ",
-    "технологическ"
-  ];
-  const humMarkers = [
-    "общество",
-    "культур",
-    "историческ",
-    "философ",
-    "социальн",
-    "политическ",
-    "психологическ",
-    "педагогическ",
-    "лингвистическ",
-    "литератур",
-    "искусств",
-    "этическ",
-    "моральн",
-    "правов",
-    "юридическ",
-    "гуманитарн",
-    "антропологи",
-    "религи",
-    "идеологи"
-  ];
-  const busMarkers = [
-    "рынок",
-    "прибыль",
-    "доход",
-    "расход",
-    "бюджет",
-    "инвестиц",
-    "маркетинг",
-    "менеджмент",
-    "предприяти",
-    "организаци",
-    "управлени",
-    "бизнес",
-    "финансов",
-    "экономическ",
-    "конкурент",
-    "стратеги"
-  ];
-  const techHits = techMarkers.filter((m2) => preview.includes(m2)).length;
-  const humHits = humMarkers.filter((m2) => preview.includes(m2)).length;
-  const busHits = busMarkers.filter((m2) => preview.includes(m2)).length;
-  const avgSentenceLen = sentences.length > 0 ? words.length / sentences.length : 15;
-  const sentComplexity = Math.min(1, avgSentenceLen / 25);
-  const techDensity = Math.min(1, techHits / 4);
-  const complexity = Math.min(1, sentComplexity * 0.5 + techDensity * 0.5);
-  const hasTechnical = techHits >= 2 && techHits >= humHits && techHits >= busHits;
-  const hasHumanities = humHits >= 2 && humHits > techHits && humHits >= busHits;
-  const hasBusiness = busHits >= 2 && busHits > techHits && busHits > humHits;
-  let domain = "mixed";
-  if (hasTechnical) domain = "technical";
-  else if (hasHumanities) domain = "humanities";
-  else if (hasBusiness) domain = "business";
-  return { complexity, domain, hasTechnical, hasHumanities, hasBusiness, wordCount, avgSentenceLen };
-}
-function criterionScore(criterion, content) {
-  const text = `${criterion.name} ${criterion.description}`.toLowerCase();
-  const highMarkers = [
-    "оригинальность",
-    "уникальность",
-    "качество содержания",
-    "глубина",
-    "аргументац",
-    "анализ",
-    "критическ",
-    "синтез",
-    "логик",
-    "концепц",
-    "обоснован",
-    "теоретическ",
-    "научн",
-    "методолог"
-  ];
-  const lowMarkers = [
-    "оформление",
-    "форматирование",
-    "грамотность",
-    "соответствие требованиям",
-    "орфограф",
-    "пунктуац"
-  ];
-  const highHits = highMarkers.filter((k2) => text.includes(k2)).length;
-  const lowHits = lowMarkers.filter((k2) => text.includes(k2)).length;
-  let base;
-  if (highHits > lowHits) base = Math.min(0.85, 0.55 + highHits * 0.1);
-  else if (lowHits > highHits) base = Math.max(0.2, 0.45 - lowHits * 0.1);
-  else base = 0.5;
-  if (!content) return base;
-  let boost = 0;
-  if (content.hasTechnical) {
-    if (/качество|глубина|содержани|анализ|точность|методолог|правильность/.test(text)) boost += 0.15;
-    if (/корректность|обоснован|научн/.test(text)) boost += 0.1;
-  }
-  if (content.hasHumanities) {
-    if (/аргумент|логик|рассуждени|доказательств/.test(text)) boost += 0.12;
-    if (/оригинальн|авторск|стиль/.test(text)) boost += 0.1;
-  }
-  if (content.hasBusiness) {
-    if (/вывод|рекоменд|практическ|применени/.test(text)) boost += 0.1;
-    if (/анализ|оценк|эффективн/.test(text)) boost += 0.08;
-  }
-  if (content.wordCount > 3e3) {
-    if (/структур|логик|последовательн|связность/.test(text)) boost += 0.08;
-  }
-  boost += content.complexity * 0.08;
-  return Math.min(0.95, base + boost);
-}
-function assignModels(models, criteria, fileContent) {
-  const sorted = [...models].sort((a, b) => b.capability - a.capability);
-  const assignment = /* @__PURE__ */ new Map();
-  if (sorted.length === 1) {
-    for (const c of criteria) assignment.set(c.id, sorted[0]);
-    return assignment;
-  }
-  const content = fileContent ? analyzeContent(fileContent) : void 0;
-  const byScore = [...criteria].map((c) => ({ criterion: c, score: criterionScore(c, content) })).sort((a, b) => b.score - a.score);
-  for (let i = 0; i < byScore.length; i++) {
-    assignment.set(byScore[i].criterion.id, sorted[i % sorted.length]);
-  }
-  return assignment;
-}
-function uniqueModelNames(assignment) {
-  return [...new Set([...assignment.values()].map((m2) => m2.displayName))];
-}
 const ELECTRON_TUTORIAL = [
   {
     icon: "fa-brain",
@@ -26727,10 +27290,10 @@ function ModelSelector() {
     setLoading(true);
     addLog("Обновление списка моделей...", "info");
     try {
-      const list2 = await fetchModels(config.llamaUrl);
-      setModels(list2);
+      const list = await fetchModels(config.llamaUrl);
+      setModels(list);
       setConnected(true);
-      addLog(`Найдено моделей: ${list2.length}`, "success");
+      addLog(`Найдено моделей: ${list.length}`, "success");
     } catch (e) {
       setConnected(false);
       const msg = e instanceof Error ? e.message : String(e);
@@ -27270,9 +27833,317 @@ function RubricGeneratorPanel() {
     ] })
   ] });
 }
+async function extractImagesFromPdf(file) {
+  const images = [];
+  let extractedCount = 0;
+  try {
+    const pdfjsLib = await __vitePreload(() => Promise.resolve().then(() => pdf), true ? void 0 : void 0, import.meta.url);
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf$12 = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    for (let pageNum = 1; pageNum <= pdf$12.numPages; pageNum++) {
+      const page = await pdf$12.getPage(pageNum);
+      const ops = await page.getOperatorList();
+      let pageHasImages = false;
+      for (let i = 0; i < ops.fnArray.length; i++) {
+        const fn = ops.fnArray[i];
+        if (fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintXObject) {
+          pageHasImages = true;
+          break;
+        }
+      }
+      if (pageHasImages) {
+        try {
+          const imgObjs = page.objs;
+          if (imgObjs && imgObjs._objs) {
+            for (const [name, img] of Object.entries(imgObjs._objs)) {
+              const imageData = img;
+              if (imageData.data && imageData.width && imageData.height) {
+                const canvas = document.createElement("canvas");
+                canvas.width = imageData.width;
+                canvas.height = imageData.height;
+                const ctx = canvas.getContext("2d");
+                try {
+                  const imgData = ctx.createImageData(imageData.width, imageData.height);
+                  imgData.data.set(imageData.data);
+                  ctx.putImageData(imgData, 0, 0);
+                  images.push({
+                    id: `pdf-page${pageNum}-${name}`,
+                    page: pageNum,
+                    dataUrl: canvas.toDataURL("image/jpeg", 0.85),
+                    mimeType: "image/jpeg",
+                    width: imageData.width,
+                    height: imageData.height
+                  });
+                  extractedCount++;
+                } catch {
+                }
+              }
+            }
+          }
+        } catch {
+        }
+      }
+      if (extractedCount === 0 && pageNum <= 5) {
+        try {
+          const viewport = page.getViewport({ scale: 1.5 });
+          const pageCanvas = document.createElement("canvas");
+          pageCanvas.width = viewport.width;
+          pageCanvas.height = viewport.height;
+          const ctx = pageCanvas.getContext("2d");
+          await page.render({
+            canvasContext: ctx,
+            viewport
+          }).promise;
+          const dataUrl = pageCanvas.toDataURL("image/jpeg", 0.85);
+          const isNotBlank = !isCanvasBlank(pageCanvas);
+          if (isNotBlank) {
+            images.push({
+              id: `pdf-page${pageNum}-full`,
+              page: pageNum,
+              dataUrl,
+              mimeType: "image/jpeg",
+              width: viewport.width,
+              height: viewport.height
+            });
+          }
+        } catch {
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("PDF image extraction failed:", e);
+  }
+  return images;
+}
+function isCanvasBlank(canvas) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return true;
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) {
+      return false;
+    }
+  }
+  return true;
+}
+async function extractImagesFromDocx(file) {
+  const images = [];
+  try {
+    const JSZip = await __vitePreload(() => import("./jszip.min-CPJtzQpf.js").then((n2) => n2.j), true ? [] : void 0, import.meta.url);
+    const arrayBuffer = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(arrayBuffer);
+    let idx = 0;
+    for (const [filename, fileData] of Object.entries(zip.files)) {
+      if (fileData && !fileData.dir && (filename.startsWith("word/media/") || /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(filename))) {
+        try {
+          const content = await fileData.async("uint8array");
+          const mimeType = getMimeType(filename);
+          const base64 = btoa(
+            Array.from(content).map((b) => String.fromCharCode(b)).join("")
+          );
+          images.push({
+            id: `docx-img-${idx}`,
+            dataUrl: `data:${mimeType};base64,${base64}`,
+            mimeType,
+            originalName: filename.split("/").pop()
+          });
+          idx++;
+        } catch {
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("DOCX image extraction failed:", e);
+  }
+  return images;
+}
+function getMimeType(filename) {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  const mimeTypes = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    bmp: "image/bmp",
+    webp: "image/webp",
+    svg: "image/svg+xml"
+  };
+  return mimeTypes[ext || ""] || "application/octet-stream";
+}
+async function extractImagesFromDocument(file, onProgress) {
+  const ext = file.name.split(".").pop()?.toLowerCase() || "";
+  onProgress?.("Определение формата", 0, 1);
+  if (ext === "pdf") {
+    onProgress?.("Извлечение изображений из PDF", 0, 1);
+    const images = await extractImagesFromPdf(file);
+    return {
+      images,
+      textLength: file.size,
+      hasImages: images.length > 0
+    };
+  }
+  if (ext === "docx" || ext === "doc") {
+    onProgress?.("Извлечение изображений из DOCX", 0, 1);
+    const images = await extractImagesFromDocx(file);
+    return {
+      images,
+      textLength: file.size,
+      hasImages: images.length > 0
+    };
+  }
+  return {
+    images: [],
+    textLength: file.size,
+    hasImages: false
+  };
+}
+async function analyzeImages(images, config, onProgress) {
+  if (images.length === 0) return [];
+  const analyses = [];
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    onProgress?.(i + 1, images.length);
+    try {
+      const analysis = await analyzeSingleImage(img, config);
+      analyses.push(analysis);
+    } catch (e) {
+      analyses.push({
+        imageId: img.id,
+        description: "",
+        hasText: false,
+        relevance: "low",
+        issues: [`Ошибка анализа: ${e instanceof Error ? e.message : String(e)}`]
+      });
+    }
+  }
+  return analyses;
+}
+async function analyzeSingleImage(image, config) {
+  const prompt = `Ты — эксперт по анализу изображений в академических работах.
+
+ОПИСАНИЕ ЗАДАНИЯ:
+Проанализируй изображение и опиши:
+1. Что изображено на картинке?
+2. Есть ли на ней текст? Если да, перепиши его.
+3. Насколько это изображение релевантно для понимания содержания работы?
+4. Есть ли проблемы с качеством (размыто, нечитаемо)?
+
+ФОРМАТ ОТВЕТА (только JSON):
+{
+  "description": "краткое описание изображения",
+  "hasText": true/false,
+  "extractedText": "текст с изображения если есть",
+  "relevance": "high/medium/low",
+  "issues": ["список проблем если есть"]
+}`;
+  const messages = [
+    { role: "user", content: [
+      { type: "text", text: prompt },
+      { type: "image_url", image_url: { url: image.dataUrl } }
+    ] }
+  ];
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 6e4);
+  try {
+    const res = await fetch(`${config.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        model: config.modelId,
+        messages,
+        temperature: 0.1,
+        max_tokens: 500
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const content = data.choices[0].message.content;
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        imageId: image.id,
+        description: parsed.description || "",
+        hasText: parsed.hasText || false,
+        extractedText: parsed.extractedText,
+        relevance: parsed.relevance || "medium",
+        issues: parsed.issues
+      };
+    }
+    return {
+      imageId: image.id,
+      description: content.substring(0, 500),
+      hasText: false,
+      relevance: "medium"
+    };
+  } catch (e) {
+    clearTimeout(timeoutId);
+    throw e;
+  }
+}
+function buildImageContext(analyses, maxChars = 1e3) {
+  if (analyses.length === 0) return "";
+  const lines = ["ИЗОБРАЖЕНИЯ В РАБОТЕ:"];
+  let totalChars = lines.join("\n").length;
+  for (const analysis of analyses) {
+    const relevanceIcon = analysis.relevance === "high" ? "📊" : analysis.relevance === "medium" ? "📷" : "❓";
+    let entry = `
+${relevanceIcon} ${analysis.description}`;
+    if (analysis.hasText && analysis.extractedText) {
+      entry += `
+   Текст: ${analysis.extractedText.substring(0, 200)}`;
+    }
+    if (analysis.issues && analysis.issues.length > 0) {
+      entry += `
+   ⚠️ ${analysis.issues.join(", ")}`;
+    }
+    if (totalChars + entry.length > maxChars) break;
+    lines.push(entry);
+    totalChars += entry.length;
+  }
+  return lines.join("\n");
+}
 const STORAGE_KEY = "studchecker-rag-v1";
 const MAX_ENTRIES = 200;
 const VECTOR_TOP_TERMS = 300;
+const IDF_KEY = "studchecker-rag-idf-v1";
+function getIDFStats() {
+  try {
+    const raw = localStorage.getItem(IDF_KEY);
+    return raw ? JSON.parse(raw) : { docFreq: {}, totalDocs: 0, lastUpdated: 0 };
+  } catch {
+    return { docFreq: {}, totalDocs: 0, lastUpdated: 0 };
+  }
+}
+function saveIDFStats(stats) {
+  try {
+    localStorage.setItem(IDF_KEY, JSON.stringify(stats));
+  } catch {
+  }
+}
+function computeIDF(word, stats) {
+  const df2 = stats.docFreq[word] || 0;
+  if (df2 === 0) return 1;
+  return Math.log(stats.totalDocs / df2);
+}
+function rebuildIDFStats(entries) {
+  const docFreq = {};
+  let totalDocs = entries.length;
+  for (const entry of entries) {
+    if (!entry.termVector) continue;
+    for (const word of Object.keys(entry.termVector)) {
+      docFreq[word] = (docFreq[word] || 0) + 1;
+    }
+  }
+  const stats = { docFreq, totalDocs, lastUpdated: Date.now() };
+  saveIDFStats(stats);
+  return stats;
+}
 const STOP_WORDS = /* @__PURE__ */ new Set([
   "и",
   "в",
@@ -27451,10 +28322,14 @@ function buildTermVector(text) {
   for (const w2 of words) freq[w2] = (freq[w2] || 0) + 1;
   const total = Object.values(freq).reduce((s, v2) => s + v2, 0);
   if (total === 0) return {};
-  const tf2 = {};
-  for (const [k2, v2] of Object.entries(freq)) tf2[k2] = v2 / total;
+  const idfStats = getIDFStats();
+  const tfidf = {};
+  for (const [word, tf2] of Object.entries(freq)) {
+    const idf = idfStats.totalDocs > 0 ? computeIDF(word, idfStats) : 1;
+    tfidf[word] = tf2 / total * idf;
+  }
   return Object.fromEntries(
-    Object.entries(tf2).sort((a, b) => b[1] - a[1]).slice(0, VECTOR_TOP_TERMS)
+    Object.entries(tfidf).sort((a, b) => b[1] - a[1]).slice(0, VECTOR_TOP_TERMS)
   );
 }
 function cosineSimilarity(v1, v2) {
@@ -27523,6 +28398,8 @@ function addToKnowledgeBase(result, content) {
   };
   const updated = [entry, ...entries].slice(0, MAX_ENTRIES);
   saveKnowledgeBase(updated);
+  const allEntries = getKnowledgeBase();
+  rebuildIDFStats(allEntries);
 }
 function findSimilar(content, topK = 3) {
   const entries = getKnowledgeBase();
@@ -27537,9 +28414,11 @@ function findSimilar(content, topK = 3) {
 function deleteEntry(id2) {
   const entries = getKnowledgeBase().filter((e) => e.id !== id2);
   saveKnowledgeBase(entries);
+  rebuildIDFStats(entries);
 }
 function clearKnowledgeBase() {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(IDF_KEY);
 }
 function getKnowledgeBaseStats() {
   const entries = getKnowledgeBase();
@@ -27673,10 +28552,10 @@ async function universalFetch(url) {
     return { ok: false, text: "" };
   }
 }
-function parseDdgHtml(html2) {
+function parseDdgHtml(html) {
   const results = [];
   const parser = new DOMParser();
-  const doc = parser.parseFromString(html2, "text/html");
+  const doc = parser.parseFromString(html, "text/html");
   for (const el2 of doc.querySelectorAll("a.result__a")) {
     const a = el2;
     let href = a.getAttribute("href") || "";
@@ -27696,7 +28575,7 @@ function parseDdgHtml(html2) {
   if (results.length === 0) {
     const rx = /href="(https?:\/\/(?!(?:www\.)?duckduckgo\.com)[^"]+)"/g;
     let m2;
-    while ((m2 = rx.exec(html2)) !== null && results.length < MAX_URLS_PER_QUERY) {
+    while ((m2 = rx.exec(html)) !== null && results.length < MAX_URLS_PER_QUERY) {
       const href = m2[1];
       if (!results.some((r2) => r2.url === href)) {
         results.push({ url: href, title: "" });
@@ -27712,10 +28591,10 @@ async function searchDuckDuckGo(query) {
   return parseDdgHtml(text);
 }
 async function fetchPageText(url) {
-  const { ok: ok2, text: html2 } = await universalFetch(url);
-  if (!ok2 || !html2) return "";
+  const { ok: ok2, text: html } = await universalFetch(url);
+  if (!ok2 || !html) return "";
   const parser = new DOMParser();
-  const doc = parser.parseFromString(html2, "text/html");
+  const doc = parser.parseFromString(html, "text/html");
   doc.querySelectorAll("script, style, nav, footer, header, aside, noscript, iframe").forEach((el2) => el2.remove());
   const raw = doc.body?.innerText || doc.documentElement.innerText || "";
   return raw.replace(/\s{2,}/g, " ").trim().substring(0, 6e4);
@@ -27892,11 +28771,15 @@ function AnalysisCenter() {
   const [liveCriteriaResults, setLiveCriteriaResults] = reactExports.useState([]);
   const [currentCriteriaNames, setCurrentCriteriaNames] = reactExports.useState([]);
   const [showInfo, setShowInfo] = reactExports.useState(false);
+  const [extractedImages, setExtractedImages] = reactExports.useState([]);
+  const [imageAnalyses, setImageAnalyses] = reactExports.useState([]);
   const startAnalysis = async () => {
     if (!canStart || !selectedRubric) return;
     setAnalyzing(true);
     setProgress(0);
     setLiveCriteriaResults([]);
+    setExtractedImages([]);
+    setImageAnalyses([]);
     const criteria = selectedRubric.criteria;
     const total = criteria.length;
     const port = config.llamaPort;
@@ -27905,6 +28788,7 @@ function AnalysisCenter() {
     let modelAssignment = null;
     let firstModel = null;
     let modelsLabel = selectedModelId ?? "unknown";
+    let aiModels = [];
     const firstContent = fileQueue[0]?.content ?? "";
     try {
       if (isElectron) {
@@ -27917,7 +28801,7 @@ function AnalysisCenter() {
           setAnalyzing(false);
           return;
         }
-        const aiModels = parseModels(listResult.models);
+        aiModels = parseModels(listResult.models);
         addLog(`Найдено моделей: ${aiModels.length} — ${aiModels.map((m2) => m2.displayName).join(", ")}`, "success");
         if (firstContent.length > 100) {
           const ca2 = analyzeContent(firstContent);
@@ -27940,6 +28824,27 @@ function AnalysisCenter() {
           return m2 ? `${c.name} → ${m2.displayName}` : null;
         }).filter(Boolean).join(" | ");
         addLog(`Распределение моделей: ${assignmentLines}`, "info");
+      } else if (!isElectron && config.llamaUrl) {
+        addLog("Попытка получить список моделей с llama-server...", "info");
+        try {
+          const response = await fetch(`${config.llamaUrl}/v1/models`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.data && data.data.length > 0) {
+              aiModels = data.data.map((m2) => ({
+                fileName: m2.id,
+                path: m2.id,
+                size: 0,
+                sizeLabel: "API",
+                displayName: m2.id,
+                capability: 50
+              }));
+              addLog(`API модели: ${aiModels.length} — ${aiModels.map((m2) => m2.displayName).join(", ")}`, "success");
+            }
+          }
+        } catch (e) {
+          addLog("Не удалось получить модели с API", "warning");
+        }
       }
       const activeModelId = isElectron ? "local" : selectedModelId ?? "";
       const similarWorks = findSimilar(firstContent, 3);
@@ -27963,10 +28868,14 @@ function AnalysisCenter() {
           addLog(`━━ Файл ${fi2 + 1}/${filesTotal}: ${fileName} ━━`, "info");
         }
         setLiveCriteriaResults([]);
+        setExtractedImages([]);
+        setImageAnalyses([]);
         const criteriaNames = criteria.map((c) => c.name);
         setCurrentCriteriaNames(criteriaNames);
         const steps = [
           { id: "planner", name: "Планировщик", status: "pending" },
+          { id: "image-extraction", name: "Извлечение изображений", status: "pending" },
+          { id: "image-analysis", name: "Анализ изображений", status: "pending" },
           ...criteria.map((c, i) => ({
             id: `expert-${i}`,
             name: c.name,
@@ -27983,18 +28892,154 @@ function AnalysisCenter() {
           });
         }
         addLog(`Текст: ${fileContent.length} символов, критериев: ${total}`, "info");
+        if (isElectron && firstModel) {
+          updateExpertStep("planner", { status: "loading", modelName: firstModel.displayName });
+          addLog(`Загрузка модели для планировщика: ${firstModel.displayName}...`, "info");
+          try {
+            const sw = await window.electronAPI.switchLlamaModel(firstModel.path, port);
+            if (!sw.success) {
+              addLog(`Не удалось загрузить модель: ${sw.error}`, "error");
+              setAnalyzing(false);
+              return;
+            }
+            addLog(`Модель загружена`, "success");
+            setConnected(true);
+          } catch (e) {
+            const err = e instanceof Error ? e.message : String(e);
+            addLog(`Ошибка загрузки модели: ${err}`, "error");
+            setAnalyzing(false);
+            return;
+          }
+        }
         updateExpertStep("planner", { status: "running" });
         addLog(`Планировщик: анализ документа «${fileName}»...`, "info");
-        await new Promise((r2) => setTimeout(r2, 2e3));
-        const wordCount = fileContent.split(/\s+/).filter(Boolean).length;
-        const plannerPrompt = `Файл: ${fileName}
-Размер: ${fileContent.length} символов, ~${wordCount} слов
-Критериев в рубрике: ${total}
-Рубрика: ${selectedRubric.name}`;
-        const plannerResponse = criteria.map((c, i) => `${i + 1}. ${c.name} (вес ${c.weight}%, макс ${c.maxScore} б) — ${c.description}`).join("\n");
-        addRequestLog({ criterion: "Планировщик", prompt: plannerPrompt, response: plannerResponse, durationMs: 0, status: "ok" });
-        addLog(`Планировщик: готово — ${wordCount} слов, ${total} критериев`, "success");
+        let executionPlan = { steps: [], estimatedSwitches: 0, recommendedFirstModel: "" };
+        try {
+          executionPlan = await runPlanner(apiConfig, selectedRubric, fileContent, aiModels);
+          if (executionPlan.steps.length > 0) {
+            addLog(`Планировщик: ${executionPlan.steps.length} шагов, ~${executionPlan.estimatedSwitches} переключений модели`, "success");
+            const assignmentLines = [];
+            for (const step of executionPlan.steps) {
+              const criterion = criteria.find((c) => c.name === step.criterion);
+              if (!criterion) continue;
+              const model = aiModels.find((m2) => m2.fileName === step.recommendedModel);
+              if (model) {
+                const switchMark = step.isModelSwitch ? " [перекл.]" : "";
+                const rationale = step.modelRationale ? ` (${step.modelRationale.substring(0, 40)})` : "";
+                assignmentLines.push(`${step.criterion}: ${model.displayName}${switchMark}${rationale}`);
+              }
+            }
+            addLog(`План выполнения: ${assignmentLines.join(" | ")}`, "info");
+            const plannerLog = {
+              criterion: "Планировщик",
+              prompt: `Файл: ${fileName}
+Модели: ${aiModels.map((m2) => `${m2.displayName} (${m2.sizeLabel})`).join(", ")}
+Критерии: ${criteria.map((c) => c.name).join(", ")}`,
+              response: executionPlan.steps.map(
+                (s) => `Шаг ${s.step}: ${s.criterion} → ${s.recommendedModel} (${s.isModelSwitch ? "переключение" : "та же модель"})`
+              ).join("\n"),
+              durationMs: 0,
+              status: "ok"
+            };
+            addRequestLog(plannerLog);
+          }
+        } catch (e) {
+          const err = e instanceof Error ? e.message : String(e);
+          addLog(`Планировщик: ошибка — ${err}`, "error");
+          const defaultModel = aiModels[0]?.fileName || "default";
+          const defaultCapability = aiModels[0]?.capability || 50;
+          executionPlan = {
+            steps: criteria.map((c, i) => ({
+              criterion: c.name,
+              criterionId: c.id,
+              prompt: `Оцени критерий "${c.name}" (${c.description}).`,
+              maxScore: c.maxScore,
+              recommendedModel: defaultModel,
+              modelRationale: "Модель по умолчанию",
+              complexity: "medium",
+              step: i + 1,
+              isModelSwitch: i > 0,
+              contextLimit: defaultCapability < 40 ? 800 : defaultCapability < 60 ? 1200 : 1800,
+              maxTokens: defaultCapability < 40 ? 200 : defaultCapability < 60 ? 300 : 400,
+              temperature: defaultCapability < 40 ? 0.05 : defaultCapability < 60 ? 0.1 : 0.15,
+              useFewShot: defaultCapability >= 40,
+              promptComplexity: defaultCapability < 40 ? "minimal" : defaultCapability < 60 ? "standard" : "detailed"
+            })),
+            estimatedSwitches: criteria.length - 1,
+            recommendedFirstModel: defaultModel
+          };
+        }
         updateExpertStep("planner", { status: "completed", score: total, maxScore: total });
+        updateExpertStep("image-extraction", { status: "running" });
+        addLog(`Извлечение изображений из документа...`, "info");
+        let fileObj = null;
+        if (fileQueue[fi2]?.file) {
+          fileObj = fileQueue[fi2].file;
+        } else {
+          addLog(`Внимание: файл недоступен для извлечения изображений`, "warning");
+        }
+        if (fileObj) {
+          try {
+            const parseResult = await extractImagesFromDocument(fileObj, (stage, current, total2) => {
+              addLog(`${stage}: ${current}/${total2}`, "info");
+            });
+            setExtractedImages(parseResult.images);
+            if (parseResult.images.length > 0) {
+              addLog(`Найдено изображений: ${parseResult.images.length}`, "success");
+              updateExpertStep("image-extraction", {
+                status: "completed",
+                modelName: `${parseResult.images.length} изображений`,
+                score: parseResult.images.length,
+                maxScore: Math.max(parseResult.images.length, 1)
+              });
+            } else {
+              addLog(`Изображений не найдено`, "info");
+              updateExpertStep("image-extraction", { status: "completed", modelName: "0 изображений" });
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            addLog(`Ошибка извлечения изображений: ${msg}`, "warning");
+            updateExpertStep("image-extraction", { status: "error" });
+            setExtractedImages([]);
+          }
+        } else {
+          addLog(`Пропуск извлечения: файл недоступен`, "info");
+          updateExpertStep("image-extraction", { status: "completed", modelName: "файл недоступен" });
+          setExtractedImages([]);
+        }
+        if (extractedImages.length > 0) {
+          updateExpertStep("image-analysis", { status: "running" });
+          addLog(`Анализ изображений через vision-модель...`, "info");
+          try {
+            const analyses = await analyzeImages(extractedImages, apiConfig, (current, total2) => {
+              updateExpertStep("image-analysis", { modelName: `${current}/${total2} изображений` });
+            });
+            setImageAnalyses(analyses);
+            const highRelevance = analyses.filter((a) => a.relevance === "high").length;
+            const mediumRelevance = analyses.filter((a) => a.relevance === "medium").length;
+            const lowRelevance = analyses.filter((a) => a.relevance === "low").length;
+            addLog(
+              `Анализ завершён: ${highRelevance} высокой релевантности, ${mediumRelevance} средней, ${lowRelevance} низкой`,
+              "success"
+            );
+            updateExpertStep("image-analysis", {
+              status: "completed",
+              modelName: `${highRelevance}/${mediumRelevance}/${lowRelevance}`,
+              score: highRelevance * 3 + mediumRelevance * 2 + lowRelevance,
+              maxScore: analyses.length * 3
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            addLog(`Ошибка анализа изображений: ${msg}`, "warning");
+            updateExpertStep("image-analysis", { status: "error" });
+            setImageAnalyses([]);
+          }
+        } else {
+          updateExpertStep("image-analysis", { status: "completed", modelName: "нет изображений" });
+          setImageAnalyses([]);
+        }
+        const imageContext = imageAnalyses.length > 0 ? buildImageContext(imageAnalyses, 1500) : "";
+        const finalSources = imageContext ? [...sourcesWithRag, { name: "[Vision] Анализ изображений", content: imageContext }] : sourcesWithRag;
         const criteriaResults = [];
         let plagiarismCache = null;
         const runPlagiarism = async (progressStepId) => {
@@ -28029,10 +29074,25 @@ ${check.title}` : ""),
           setPlagiarismReport(report);
           return report;
         };
+        let currentLoadedModel = null;
         for (let i = 0; i < total; i++) {
           const criterion = criteria[i];
           const stepId = `expert-${i}`;
-          const assignedModel = modelAssignment?.get(criterion.id) ?? firstModel;
+          const planStep = executionPlan.steps.find((s) => s.criterion === criterion.name);
+          let assignedModel;
+          if (planStep && aiModels.length > 0) {
+            assignedModel = aiModels.find((m2) => m2.fileName === planStep.recommendedModel);
+            if (!assignedModel) {
+              const targetCapability = planStep.complexity === "high" ? 70 : planStep.complexity === "medium" ? 50 : 40;
+              assignedModel = findClosestModel(aiModels, targetCapability);
+            }
+          }
+          if (!assignedModel) {
+            assignedModel = modelAssignment?.get(criterion.id);
+          }
+          if (!assignedModel) {
+            assignedModel = firstModel;
+          }
           if (isOriginalityCriterion(criterion)) {
             updateExpertStep(stepId, { status: "running" });
             addLog(`Антиплагиат: запуск для критерия «${criterion.name}»...`, "info");
@@ -28074,25 +29134,59 @@ ${check.title}` : ""),
             continue;
           }
           if (isElectron && assignedModel) {
-            updateExpertStep(stepId, { status: "loading", modelName: assignedModel.displayName });
-            addLog(`Загрузка модели: ${assignedModel.displayName}...`, "info");
-            const sw = await window.electronAPI.switchLlamaModel(assignedModel.path, port);
-            if (!sw.success) {
-              addLog(`Не удалось загрузить модель: ${sw.error}`, "error");
-              updateExpertStep(stepId, { status: "error" });
-              const fb2 = makeFallback(criterion, `Ошибка загрузки модели: ${sw.error}`);
-              criteriaResults.push(fb2);
-              setLiveCriteriaResults((prev) => [...prev, fb2]);
-              setProgress((fi2 * total + i + 1) / (filesTotal * total) * 90);
-              continue;
+            const needsSwitch = planStep?.isModelSwitch || currentLoadedModel !== assignedModel.fileName;
+            if (needsSwitch) {
+              updateExpertStep(stepId, { status: "loading", modelName: assignedModel.displayName });
+              addLog(`Переключение на модель: ${assignedModel.displayName}...`, "info");
+              let loadSuccess = false;
+              let lastError = "";
+              for (let attempt = 1; attempt <= 3 && !loadSuccess; attempt++) {
+                if (attempt > 1) {
+                  addLog(`Попытка ${attempt}: повторная загрузка...`, "warning");
+                  await new Promise((r2) => setTimeout(r2, 2e3));
+                }
+                const sw = await window.electronAPI.switchLlamaModel(assignedModel.path, port);
+                if (sw.success) {
+                  loadSuccess = true;
+                } else {
+                  lastError = sw.error || "Неизвестная ошибка";
+                  addLog(`Попытка ${attempt} не удалась: ${lastError}`, "warning");
+                }
+              }
+              if (!loadSuccess) {
+                addLog(`Не удалось загрузить модель после 3 попыток: ${lastError}`, "error");
+                updateExpertStep(stepId, { status: "error" });
+                const fb2 = makeFallback(criterion, `Ошибка загрузки модели: ${lastError}`);
+                criteriaResults.push(fb2);
+                setLiveCriteriaResults((prev) => [...prev, fb2]);
+                setProgress((fi2 * total + i + 1) / (filesTotal * total) * 90);
+                continue;
+              }
+              currentLoadedModel = assignedModel.fileName;
+              addLog(`Модель загружена, проверка готовности...`, "success");
+              const ready = await waitForServerReady(baseUrl, 6e4);
+              if (!ready) {
+                addLog(`Сервер не ответил в течение 60 секунд`, "error");
+                updateExpertStep(stepId, { status: "error" });
+                const fb2 = makeFallback(criterion, "Сервер не готов");
+                criteriaResults.push(fb2);
+                setLiveCriteriaResults((prev) => [...prev, fb2]);
+                continue;
+              }
+              setConnected(true);
+            } else {
+              addLog(`Используется загруженная модель: ${assignedModel.displayName}`, "info");
             }
-            addLog(`Модель загружена`, "success");
-            setConnected(true);
           }
           updateExpertStep(stepId, { status: "running" });
           addLog(`Оценка: ${criterion.name}...`, "info");
           try {
-            const result = await evaluateCriterion(apiConfig, criterion, null, fileContent);
+            const result = await evaluateCriterion(
+              { ...apiConfig, sources: finalSources },
+              criterion,
+              null,
+              fileContent
+            );
             criteriaResults.push(result);
             setLiveCriteriaResults((prev) => [...prev, result]);
             updateExpertStep(stepId, { status: "completed", score: result.score, maxScore: criterion.maxScore });
@@ -28108,7 +29202,7 @@ ${check.title}` : ""),
           if (isElectron) {
             addLog(`Выгрузка модели...`, "info");
             await window.electronAPI.stopLlamaServer();
-            await new Promise((r2) => setTimeout(r2, 800));
+            await new Promise((r2) => setTimeout(r2, 2e3));
           }
           setProgress((fi2 * (total + 2) + i + 1) / (filesTotal * (total + 2)) * 90);
         }
@@ -28188,6 +29282,17 @@ ${check.title}` : ""),
           addLog(`База знаний: ошибка сохранения — ${e instanceof Error ? e.message : String(e)}`, "error");
         }
         addLog(`${fileName}: ${finalResult.finalScore}/100 (${finalResult.grade} — ${finalResult.gradeDescription})`, "success");
+        if (isElectron && fi2 < filesTotal - 1) {
+          addLog("Выгрузка модели для перехода к следующему файлу...", "info");
+          try {
+            await window.electronAPI.stopLlamaServer();
+            await new Promise((r2) => setTimeout(r2, 1500));
+            addLog("Модель выгружена", "info");
+          } catch (e) {
+            const err = e instanceof Error ? e.message : String(e);
+            addLog(`Предупреждение: ошибка выгрузки — ${err}`, "warning");
+          }
+        }
       }
       setProgress(100);
       addLog(filesTotal > 1 ? `Все ${filesTotal} работ проверены!` : "Проверка завершена!", "success");
@@ -28255,6 +29360,27 @@ ${check.title}` : ""),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-2", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(OrchestratorCard, { expertSteps, progress: analysisProgress }),
         expertSteps.filter((s) => s.id === "planner").map((step) => /* @__PURE__ */ jsxRuntimeExports.jsx(ExpertStepRow, { step, criteriaNames: currentCriteriaNames, variant: "planner" }, step.id)),
+        (() => {
+          const imgExtStep = expertSteps.find((s) => s.id === "image-extraction");
+          const imgAnalysisStep = expertSteps.find((s) => s.id === "image-analysis");
+          if (!imgExtStep && !imgAnalysisStep) return null;
+          if ((imgExtStep?.status === "completed" || imgExtStep?.status === "pending") && (imgAnalysisStep?.status === "completed" || imgAnalysisStep?.status === "pending") && extractedImages.length > 0) {
+            return /* @__PURE__ */ jsxRuntimeExports.jsx(
+              ImageAnalyzerCard,
+              {
+                extractionStep: imgExtStep,
+                analysisStep: imgAnalysisStep,
+                images: extractedImages,
+                analyses: imageAnalyses
+              },
+              "image-analysis"
+            );
+          }
+          return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-2", children: [
+            imgExtStep && /* @__PURE__ */ jsxRuntimeExports.jsx(ExpertStepRow, { step: imgExtStep, variant: "image" }, imgExtStep.id),
+            imgAnalysisStep && /* @__PURE__ */ jsxRuntimeExports.jsx(ExpertStepRow, { step: imgAnalysisStep, variant: "image" }, imgAnalysisStep.id)
+          ] }, "image-steps");
+        })(),
         (() => {
           const cs = expertSteps.filter((s) => s.id.startsWith("expert-"));
           return cs.length > 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx(CriteriaCard, { steps: cs }, "criteria") : null;
@@ -28567,6 +29693,112 @@ function SummarizerCard({ step, criteriaResults }) {
         ] })
       ] })
     ] })
+  ] });
+}
+function ImageAnalyzerCard({
+  extractionStep,
+  analysisStep,
+  images,
+  analyses
+}) {
+  const [revealed, setRevealed] = reactExports.useState(0);
+  const isExtractionDone = extractionStep.status === "completed";
+  const isAnalysisDone = analysisStep.status === "completed";
+  const isRunning = analysisStep.status === "running";
+  const isLoading = analysisStep.status === "loading";
+  reactExports.useEffect(() => {
+    if (isAnalysisDone || !isRunning) return;
+    setRevealed(0);
+    const delay = Math.max(300, Math.floor(1500 / Math.max(analyses.length, 1)));
+    const interval = setInterval(() => {
+      setRevealed((n2) => n2 >= analyses.length ? n2 : n2 + 1);
+    }, delay);
+    return () => clearInterval(interval);
+  }, [isRunning, analyses.length]);
+  reactExports.useEffect(() => {
+    if (isAnalysisDone) setRevealed(analyses.length);
+  }, [isAnalysisDone, analyses.length]);
+  const highCount = analyses.filter((a) => a.relevance === "high").length;
+  const mediumCount = analyses.filter((a) => a.relevance === "medium").length;
+  const lowCount = analyses.filter((a) => a.relevance === "low").length;
+  const isDone = isExtractionDone && isAnalysisDone;
+  const relevanceColor = (r2) => r2 === "high" ? "text-emerald-500" : r2 === "medium" ? "text-amber-500" : "text-slate-400";
+  const relevanceBg = (r2) => r2 === "high" ? "bg-emerald-50 border-emerald-200" : r2 === "medium" ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200";
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: `rounded-xl border-2 overflow-hidden animate-slide-in ${isDone ? "border-teal-300 bg-teal-50" : "border-teal-400 bg-teal-50"}`, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2.5 px-3 py-2.5", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("i", { className: `fa-solid fa-image text-sm ${isDone ? "text-teal-500" : "text-teal-600"}` }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs font-bold text-slate-800 flex-1", children: "Анализ изображений" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `text-[10px] font-semibold px-2 py-0.5 rounded-full ${isDone ? "text-teal-600 bg-teal-100" : "text-teal-600 bg-teal-100"}`, children: isExtractionDone ? `${images.length} изображений` : "..." }),
+      isDone ? /* @__PURE__ */ jsxRuntimeExports.jsx("i", { className: "fa-solid fa-circle-check text-teal-500 text-xs ml-1" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("i", { className: "fa-solid fa-circle-notch fa-spin text-teal-400 text-xs ml-1" })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: `border-t px-3 py-3 ${isDone ? "border-teal-200" : "border-teal-200"}`, children: [
+      images.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-500 text-center py-2", children: "Изображения не найдены" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-2", children: [
+        analyses.slice(0, 6).map((analysis, i) => {
+          const image = images.find((img) => img.id === analysis.imageId);
+          return /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "div",
+            {
+              className: `rounded-lg border p-2 transition-all duration-400 ${relevanceBg(analysis.relevance)}`,
+              style: { opacity: i < revealed ? 1 : 0.3 },
+              children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-start gap-2", children: [
+                image && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "w-10 h-10 rounded overflow-hidden shrink-0 bg-slate-100", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "img",
+                  {
+                    src: image.dataUrl,
+                    alt: "",
+                    className: "w-full h-full object-cover"
+                  }
+                ) }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 min-w-0", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 mb-1", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `text-[9px] font-bold uppercase ${relevanceColor(analysis.relevance)}`, children: analysis.relevance === "high" ? "Высокая" : analysis.relevance === "medium" ? "Средняя" : "Низкая" }),
+                    analysis.hasText && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[8px] bg-blue-100 text-blue-600 px-1 rounded", children: "текст" })
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-[10px] text-slate-600 leading-tight line-clamp-2", children: analysis.description || "Описание недоступно" }),
+                  analysis.issues && analysis.issues.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-[9px] text-red-500 mt-0.5", children: [
+                    "⚠ ",
+                    analysis.issues[0]
+                  ] })
+                ] })
+              ] })
+            },
+            analysis.imageId
+          );
+        }),
+        analyses.length > 6 && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-[10px] text-slate-400 text-center", children: [
+          "+",
+          analyses.length - 6,
+          " изображений..."
+        ] })
+      ] }),
+      !isDone && (isRunning || isLoading) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-3 flex items-center gap-2 text-[10px] text-teal-600", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("i", { className: "fa-solid fa-circle-notch fa-spin text-xs" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Анализ через vision-модель..." })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-3 pb-3", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-3 text-[9px]", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-full bg-emerald-400" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-slate-500", children: [
+          "Высокая: ",
+          highCount
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-full bg-amber-400" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-slate-500", children: [
+          "Средняя: ",
+          mediumCount
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-full bg-slate-300" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-slate-500", children: [
+          "Низкая: ",
+          lowCount
+        ] })
+      ] })
+    ] }) })
   ] });
 }
 function CriteriaCardSvg({ steps }) {
@@ -28889,7 +30121,7 @@ function ExpertStepRow({
   };
   const s = statusConfig[step.status];
   const isSpecial = variant !== "criterion";
-  const specialIcons = { planner: "fa-map", criterion: "", plagiarism: "fa-shield-halved", summarizer: "fa-sigma" };
+  const specialIcons = { planner: "fa-map", criterion: "", plagiarism: "fa-shield-halved", summarizer: "fa-sigma", image: "fa-image" };
   const iconClass = isSpecial ? specialIcons[variant] : s.icon;
   const progressPct = step.status === "completed" && step.score !== void 0 && step.maxScore ? Math.min(100, Math.round(step.score / step.maxScore * 100)) : step.status === "completed" ? 100 : 0;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: `rounded-lg border transition-all overflow-hidden ${s.bg} ${s.border} ${isSpecial ? "border-dashed" : ""}`, children: [
@@ -38222,11 +39454,11 @@ function determineYAlign(chart, size) {
 }
 function doesNotFitWithAlign(xAlign, chart, options, size) {
   const { x: x2, width } = size;
-  const caret2 = options.caretSize + options.caretPadding;
-  if (xAlign === "left" && x2 + width + caret2 > chart.width) {
+  const caret = options.caretSize + options.caretPadding;
+  if (xAlign === "left" && x2 + width + caret > chart.width) {
     return true;
   }
-  if (xAlign === "right" && x2 - width - caret2 < 0) {
+  if (xAlign === "right" && x2 - width - caret < 0) {
     return true;
   }
 }
@@ -39581,2018 +40813,18 @@ class TimeSeriesScale extends TimeScale {
     return interpolate(this._table, decimal * this._tableRange + this._minPos, true);
   }
 }
-function _getDefaults() {
-  return {
-    async: false,
-    breaks: false,
-    extensions: null,
-    gfm: true,
-    hooks: null,
-    pedantic: false,
-    renderer: null,
-    silent: false,
-    tokenizer: null,
-    walkTokens: null
-  };
-}
-let _defaults = _getDefaults();
-function changeDefaults(newDefaults) {
-  _defaults = newDefaults;
-}
-const escapeTest = /[&<>"']/;
-const escapeReplace = new RegExp(escapeTest.source, "g");
-const escapeTestNoEncode = /[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/;
-const escapeReplaceNoEncode = new RegExp(escapeTestNoEncode.source, "g");
-const escapeReplacements = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;"
-};
-const getEscapeReplacement = (ch2) => escapeReplacements[ch2];
-function escape$1(html2, encode) {
-  if (encode) {
-    if (escapeTest.test(html2)) {
-      return html2.replace(escapeReplace, getEscapeReplacement);
-    }
-  } else {
-    if (escapeTestNoEncode.test(html2)) {
-      return html2.replace(escapeReplaceNoEncode, getEscapeReplacement);
-    }
-  }
-  return html2;
-}
-const unescapeTest = /&(#(?:\d+)|(?:#x[0-9A-Fa-f]+)|(?:\w+));?/ig;
-function unescape$1(html2) {
-  return html2.replace(unescapeTest, (_, n2) => {
-    n2 = n2.toLowerCase();
-    if (n2 === "colon")
-      return ":";
-    if (n2.charAt(0) === "#") {
-      return n2.charAt(1) === "x" ? String.fromCharCode(parseInt(n2.substring(2), 16)) : String.fromCharCode(+n2.substring(1));
-    }
-    return "";
-  });
-}
-const caret = /(^|[^\[])\^/g;
-function edit(regex, opt) {
-  let source = typeof regex === "string" ? regex : regex.source;
-  opt = opt || "";
-  const obj = {
-    replace: (name, val) => {
-      let valSource = typeof val === "string" ? val : val.source;
-      valSource = valSource.replace(caret, "$1");
-      source = source.replace(name, valSource);
-      return obj;
-    },
-    getRegex: () => {
-      return new RegExp(source, opt);
-    }
-  };
-  return obj;
-}
-function cleanUrl(href) {
-  try {
-    href = encodeURI(href).replace(/%25/g, "%");
-  } catch (e) {
-    return null;
-  }
-  return href;
-}
-const noopTest = { exec: () => null };
-function splitCells(tableRow, count) {
-  const row = tableRow.replace(/\|/g, (match, offset, str) => {
-    let escaped = false;
-    let curr = offset;
-    while (--curr >= 0 && str[curr] === "\\")
-      escaped = !escaped;
-    if (escaped) {
-      return "|";
-    } else {
-      return " |";
-    }
-  }), cells = row.split(/ \|/);
-  let i = 0;
-  if (!cells[0].trim()) {
-    cells.shift();
-  }
-  if (cells.length > 0 && !cells[cells.length - 1].trim()) {
-    cells.pop();
-  }
-  if (count) {
-    if (cells.length > count) {
-      cells.splice(count);
-    } else {
-      while (cells.length < count)
-        cells.push("");
-    }
-  }
-  for (; i < cells.length; i++) {
-    cells[i] = cells[i].trim().replace(/\\\|/g, "|");
-  }
-  return cells;
-}
-function rtrim(str, c, invert) {
-  const l2 = str.length;
-  if (l2 === 0) {
-    return "";
-  }
-  let suffLen = 0;
-  while (suffLen < l2) {
-    const currChar = str.charAt(l2 - suffLen - 1);
-    if (currChar === c && true) {
-      suffLen++;
-    } else {
-      break;
-    }
-  }
-  return str.slice(0, l2 - suffLen);
-}
-function findClosingBracket(str, b) {
-  if (str.indexOf(b[1]) === -1) {
-    return -1;
-  }
-  let level = 0;
-  for (let i = 0; i < str.length; i++) {
-    if (str[i] === "\\") {
-      i++;
-    } else if (str[i] === b[0]) {
-      level++;
-    } else if (str[i] === b[1]) {
-      level--;
-      if (level < 0) {
-        return i;
-      }
-    }
-  }
-  return -1;
-}
-function outputLink(cap, link2, raw, lexer) {
-  const href = link2.href;
-  const title = link2.title ? escape$1(link2.title) : null;
-  const text = cap[1].replace(/\\([\[\]])/g, "$1");
-  if (cap[0].charAt(0) !== "!") {
-    lexer.state.inLink = true;
-    const token = {
-      type: "link",
-      raw,
-      href,
-      title,
-      text,
-      tokens: lexer.inlineTokens(text)
-    };
-    lexer.state.inLink = false;
-    return token;
-  }
-  return {
-    type: "image",
-    raw,
-    href,
-    title,
-    text: escape$1(text)
-  };
-}
-function indentCodeCompensation(raw, text) {
-  const matchIndentToCode = raw.match(/^(\s+)(?:```)/);
-  if (matchIndentToCode === null) {
-    return text;
-  }
-  const indentToCode = matchIndentToCode[1];
-  return text.split("\n").map((node) => {
-    const matchIndentInNode = node.match(/^\s+/);
-    if (matchIndentInNode === null) {
-      return node;
-    }
-    const [indentInNode] = matchIndentInNode;
-    if (indentInNode.length >= indentToCode.length) {
-      return node.slice(indentToCode.length);
-    }
-    return node;
-  }).join("\n");
-}
-class _Tokenizer {
-  options;
-  rules;
-  // set by the lexer
-  lexer;
-  // set by the lexer
-  constructor(options) {
-    this.options = options || _defaults;
-  }
-  space(src) {
-    const cap = this.rules.block.newline.exec(src);
-    if (cap && cap[0].length > 0) {
-      return {
-        type: "space",
-        raw: cap[0]
-      };
-    }
-  }
-  code(src) {
-    const cap = this.rules.block.code.exec(src);
-    if (cap) {
-      const text = cap[0].replace(/^ {1,4}/gm, "");
-      return {
-        type: "code",
-        raw: cap[0],
-        codeBlockStyle: "indented",
-        text: !this.options.pedantic ? rtrim(text, "\n") : text
-      };
-    }
-  }
-  fences(src) {
-    const cap = this.rules.block.fences.exec(src);
-    if (cap) {
-      const raw = cap[0];
-      const text = indentCodeCompensation(raw, cap[3] || "");
-      return {
-        type: "code",
-        raw,
-        lang: cap[2] ? cap[2].trim().replace(this.rules.inline.anyPunctuation, "$1") : cap[2],
-        text
-      };
-    }
-  }
-  heading(src) {
-    const cap = this.rules.block.heading.exec(src);
-    if (cap) {
-      let text = cap[2].trim();
-      if (/#$/.test(text)) {
-        const trimmed = rtrim(text, "#");
-        if (this.options.pedantic) {
-          text = trimmed.trim();
-        } else if (!trimmed || / $/.test(trimmed)) {
-          text = trimmed.trim();
-        }
-      }
-      return {
-        type: "heading",
-        raw: cap[0],
-        depth: cap[1].length,
-        text,
-        tokens: this.lexer.inline(text)
-      };
-    }
-  }
-  hr(src) {
-    const cap = this.rules.block.hr.exec(src);
-    if (cap) {
-      return {
-        type: "hr",
-        raw: cap[0]
-      };
-    }
-  }
-  blockquote(src) {
-    const cap = this.rules.block.blockquote.exec(src);
-    if (cap) {
-      let text = cap[0].replace(/\n {0,3}((?:=+|-+) *)(?=\n|$)/g, "\n    $1");
-      text = rtrim(text.replace(/^ *>[ \t]?/gm, ""), "\n");
-      const top = this.lexer.state.top;
-      this.lexer.state.top = true;
-      const tokens = this.lexer.blockTokens(text);
-      this.lexer.state.top = top;
-      return {
-        type: "blockquote",
-        raw: cap[0],
-        tokens,
-        text
-      };
-    }
-  }
-  list(src) {
-    let cap = this.rules.block.list.exec(src);
-    if (cap) {
-      let bull = cap[1].trim();
-      const isordered = bull.length > 1;
-      const list2 = {
-        type: "list",
-        raw: "",
-        ordered: isordered,
-        start: isordered ? +bull.slice(0, -1) : "",
-        loose: false,
-        items: []
-      };
-      bull = isordered ? `\\d{1,9}\\${bull.slice(-1)}` : `\\${bull}`;
-      if (this.options.pedantic) {
-        bull = isordered ? bull : "[*+-]";
-      }
-      const itemRegex = new RegExp(`^( {0,3}${bull})((?:[	 ][^\\n]*)?(?:\\n|$))`);
-      let raw = "";
-      let itemContents = "";
-      let endsWithBlankLine = false;
-      while (src) {
-        let endEarly = false;
-        if (!(cap = itemRegex.exec(src))) {
-          break;
-        }
-        if (this.rules.block.hr.test(src)) {
-          break;
-        }
-        raw = cap[0];
-        src = src.substring(raw.length);
-        let line = cap[2].split("\n", 1)[0].replace(/^\t+/, (t2) => " ".repeat(3 * t2.length));
-        let nextLine = src.split("\n", 1)[0];
-        let indent = 0;
-        if (this.options.pedantic) {
-          indent = 2;
-          itemContents = line.trimStart();
-        } else {
-          indent = cap[2].search(/[^ ]/);
-          indent = indent > 4 ? 1 : indent;
-          itemContents = line.slice(indent);
-          indent += cap[1].length;
-        }
-        let blankLine = false;
-        if (!line && /^ *$/.test(nextLine)) {
-          raw += nextLine + "\n";
-          src = src.substring(nextLine.length + 1);
-          endEarly = true;
-        }
-        if (!endEarly) {
-          const nextBulletRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`);
-          const hrRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`);
-          const fencesBeginRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}(?:\`\`\`|~~~)`);
-          const headingBeginRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}#`);
-          while (src) {
-            const rawLine = src.split("\n", 1)[0];
-            nextLine = rawLine;
-            if (this.options.pedantic) {
-              nextLine = nextLine.replace(/^ {1,4}(?=( {4})*[^ ])/g, "  ");
-            }
-            if (fencesBeginRegex.test(nextLine)) {
-              break;
-            }
-            if (headingBeginRegex.test(nextLine)) {
-              break;
-            }
-            if (nextBulletRegex.test(nextLine)) {
-              break;
-            }
-            if (hrRegex.test(src)) {
-              break;
-            }
-            if (nextLine.search(/[^ ]/) >= indent || !nextLine.trim()) {
-              itemContents += "\n" + nextLine.slice(indent);
-            } else {
-              if (blankLine) {
-                break;
-              }
-              if (line.search(/[^ ]/) >= 4) {
-                break;
-              }
-              if (fencesBeginRegex.test(line)) {
-                break;
-              }
-              if (headingBeginRegex.test(line)) {
-                break;
-              }
-              if (hrRegex.test(line)) {
-                break;
-              }
-              itemContents += "\n" + nextLine;
-            }
-            if (!blankLine && !nextLine.trim()) {
-              blankLine = true;
-            }
-            raw += rawLine + "\n";
-            src = src.substring(rawLine.length + 1);
-            line = nextLine.slice(indent);
-          }
-        }
-        if (!list2.loose) {
-          if (endsWithBlankLine) {
-            list2.loose = true;
-          } else if (/\n *\n *$/.test(raw)) {
-            endsWithBlankLine = true;
-          }
-        }
-        let istask = null;
-        let ischecked;
-        if (this.options.gfm) {
-          istask = /^\[[ xX]\] /.exec(itemContents);
-          if (istask) {
-            ischecked = istask[0] !== "[ ] ";
-            itemContents = itemContents.replace(/^\[[ xX]\] +/, "");
-          }
-        }
-        list2.items.push({
-          type: "list_item",
-          raw,
-          task: !!istask,
-          checked: ischecked,
-          loose: false,
-          text: itemContents,
-          tokens: []
-        });
-        list2.raw += raw;
-      }
-      list2.items[list2.items.length - 1].raw = raw.trimEnd();
-      list2.items[list2.items.length - 1].text = itemContents.trimEnd();
-      list2.raw = list2.raw.trimEnd();
-      for (let i = 0; i < list2.items.length; i++) {
-        this.lexer.state.top = false;
-        list2.items[i].tokens = this.lexer.blockTokens(list2.items[i].text, []);
-        if (!list2.loose) {
-          const spacers = list2.items[i].tokens.filter((t2) => t2.type === "space");
-          const hasMultipleLineBreaks = spacers.length > 0 && spacers.some((t2) => /\n.*\n/.test(t2.raw));
-          list2.loose = hasMultipleLineBreaks;
-        }
-      }
-      if (list2.loose) {
-        for (let i = 0; i < list2.items.length; i++) {
-          list2.items[i].loose = true;
-        }
-      }
-      return list2;
-    }
-  }
-  html(src) {
-    const cap = this.rules.block.html.exec(src);
-    if (cap) {
-      const token = {
-        type: "html",
-        block: true,
-        raw: cap[0],
-        pre: cap[1] === "pre" || cap[1] === "script" || cap[1] === "style",
-        text: cap[0]
-      };
-      return token;
-    }
-  }
-  def(src) {
-    const cap = this.rules.block.def.exec(src);
-    if (cap) {
-      const tag2 = cap[1].toLowerCase().replace(/\s+/g, " ");
-      const href = cap[2] ? cap[2].replace(/^<(.*)>$/, "$1").replace(this.rules.inline.anyPunctuation, "$1") : "";
-      const title = cap[3] ? cap[3].substring(1, cap[3].length - 1).replace(this.rules.inline.anyPunctuation, "$1") : cap[3];
-      return {
-        type: "def",
-        tag: tag2,
-        raw: cap[0],
-        href,
-        title
-      };
-    }
-  }
-  table(src) {
-    const cap = this.rules.block.table.exec(src);
-    if (!cap) {
-      return;
-    }
-    if (!/[:|]/.test(cap[2])) {
-      return;
-    }
-    const headers = splitCells(cap[1]);
-    const aligns = cap[2].replace(/^\||\| *$/g, "").split("|");
-    const rows = cap[3] && cap[3].trim() ? cap[3].replace(/\n[ \t]*$/, "").split("\n") : [];
-    const item = {
-      type: "table",
-      raw: cap[0],
-      header: [],
-      align: [],
-      rows: []
-    };
-    if (headers.length !== aligns.length) {
-      return;
-    }
-    for (const align of aligns) {
-      if (/^ *-+: *$/.test(align)) {
-        item.align.push("right");
-      } else if (/^ *:-+: *$/.test(align)) {
-        item.align.push("center");
-      } else if (/^ *:-+ *$/.test(align)) {
-        item.align.push("left");
-      } else {
-        item.align.push(null);
-      }
-    }
-    for (const header of headers) {
-      item.header.push({
-        text: header,
-        tokens: this.lexer.inline(header)
-      });
-    }
-    for (const row of rows) {
-      item.rows.push(splitCells(row, item.header.length).map((cell) => {
-        return {
-          text: cell,
-          tokens: this.lexer.inline(cell)
-        };
-      }));
-    }
-    return item;
-  }
-  lheading(src) {
-    const cap = this.rules.block.lheading.exec(src);
-    if (cap) {
-      return {
-        type: "heading",
-        raw: cap[0],
-        depth: cap[2].charAt(0) === "=" ? 1 : 2,
-        text: cap[1],
-        tokens: this.lexer.inline(cap[1])
-      };
-    }
-  }
-  paragraph(src) {
-    const cap = this.rules.block.paragraph.exec(src);
-    if (cap) {
-      const text = cap[1].charAt(cap[1].length - 1) === "\n" ? cap[1].slice(0, -1) : cap[1];
-      return {
-        type: "paragraph",
-        raw: cap[0],
-        text,
-        tokens: this.lexer.inline(text)
-      };
-    }
-  }
-  text(src) {
-    const cap = this.rules.block.text.exec(src);
-    if (cap) {
-      return {
-        type: "text",
-        raw: cap[0],
-        text: cap[0],
-        tokens: this.lexer.inline(cap[0])
-      };
-    }
-  }
-  escape(src) {
-    const cap = this.rules.inline.escape.exec(src);
-    if (cap) {
-      return {
-        type: "escape",
-        raw: cap[0],
-        text: escape$1(cap[1])
-      };
-    }
-  }
-  tag(src) {
-    const cap = this.rules.inline.tag.exec(src);
-    if (cap) {
-      if (!this.lexer.state.inLink && /^<a /i.test(cap[0])) {
-        this.lexer.state.inLink = true;
-      } else if (this.lexer.state.inLink && /^<\/a>/i.test(cap[0])) {
-        this.lexer.state.inLink = false;
-      }
-      if (!this.lexer.state.inRawBlock && /^<(pre|code|kbd|script)(\s|>)/i.test(cap[0])) {
-        this.lexer.state.inRawBlock = true;
-      } else if (this.lexer.state.inRawBlock && /^<\/(pre|code|kbd|script)(\s|>)/i.test(cap[0])) {
-        this.lexer.state.inRawBlock = false;
-      }
-      return {
-        type: "html",
-        raw: cap[0],
-        inLink: this.lexer.state.inLink,
-        inRawBlock: this.lexer.state.inRawBlock,
-        block: false,
-        text: cap[0]
-      };
-    }
-  }
-  link(src) {
-    const cap = this.rules.inline.link.exec(src);
-    if (cap) {
-      const trimmedUrl = cap[2].trim();
-      if (!this.options.pedantic && /^</.test(trimmedUrl)) {
-        if (!/>$/.test(trimmedUrl)) {
-          return;
-        }
-        const rtrimSlash = rtrim(trimmedUrl.slice(0, -1), "\\");
-        if ((trimmedUrl.length - rtrimSlash.length) % 2 === 0) {
-          return;
-        }
-      } else {
-        const lastParenIndex = findClosingBracket(cap[2], "()");
-        if (lastParenIndex > -1) {
-          const start = cap[0].indexOf("!") === 0 ? 5 : 4;
-          const linkLen = start + cap[1].length + lastParenIndex;
-          cap[2] = cap[2].substring(0, lastParenIndex);
-          cap[0] = cap[0].substring(0, linkLen).trim();
-          cap[3] = "";
-        }
-      }
-      let href = cap[2];
-      let title = "";
-      if (this.options.pedantic) {
-        const link2 = /^([^'"]*[^\s])\s+(['"])(.*)\2/.exec(href);
-        if (link2) {
-          href = link2[1];
-          title = link2[3];
-        }
-      } else {
-        title = cap[3] ? cap[3].slice(1, -1) : "";
-      }
-      href = href.trim();
-      if (/^</.test(href)) {
-        if (this.options.pedantic && !/>$/.test(trimmedUrl)) {
-          href = href.slice(1);
-        } else {
-          href = href.slice(1, -1);
-        }
-      }
-      return outputLink(cap, {
-        href: href ? href.replace(this.rules.inline.anyPunctuation, "$1") : href,
-        title: title ? title.replace(this.rules.inline.anyPunctuation, "$1") : title
-      }, cap[0], this.lexer);
-    }
-  }
-  reflink(src, links) {
-    let cap;
-    if ((cap = this.rules.inline.reflink.exec(src)) || (cap = this.rules.inline.nolink.exec(src))) {
-      const linkString = (cap[2] || cap[1]).replace(/\s+/g, " ");
-      const link2 = links[linkString.toLowerCase()];
-      if (!link2) {
-        const text = cap[0].charAt(0);
-        return {
-          type: "text",
-          raw: text,
-          text
-        };
-      }
-      return outputLink(cap, link2, cap[0], this.lexer);
-    }
-  }
-  emStrong(src, maskedSrc, prevChar = "") {
-    let match = this.rules.inline.emStrongLDelim.exec(src);
-    if (!match)
-      return;
-    if (match[3] && prevChar.match(/[\p{L}\p{N}]/u))
-      return;
-    const nextChar = match[1] || match[2] || "";
-    if (!nextChar || !prevChar || this.rules.inline.punctuation.exec(prevChar)) {
-      const lLength = [...match[0]].length - 1;
-      let rDelim, rLength, delimTotal = lLength, midDelimTotal = 0;
-      const endReg = match[0][0] === "*" ? this.rules.inline.emStrongRDelimAst : this.rules.inline.emStrongRDelimUnd;
-      endReg.lastIndex = 0;
-      maskedSrc = maskedSrc.slice(-1 * src.length + lLength);
-      while ((match = endReg.exec(maskedSrc)) != null) {
-        rDelim = match[1] || match[2] || match[3] || match[4] || match[5] || match[6];
-        if (!rDelim)
-          continue;
-        rLength = [...rDelim].length;
-        if (match[3] || match[4]) {
-          delimTotal += rLength;
-          continue;
-        } else if (match[5] || match[6]) {
-          if (lLength % 3 && !((lLength + rLength) % 3)) {
-            midDelimTotal += rLength;
-            continue;
-          }
-        }
-        delimTotal -= rLength;
-        if (delimTotal > 0)
-          continue;
-        rLength = Math.min(rLength, rLength + delimTotal + midDelimTotal);
-        const lastCharLength = [...match[0]][0].length;
-        const raw = src.slice(0, lLength + match.index + lastCharLength + rLength);
-        if (Math.min(lLength, rLength) % 2) {
-          const text2 = raw.slice(1, -1);
-          return {
-            type: "em",
-            raw,
-            text: text2,
-            tokens: this.lexer.inlineTokens(text2)
-          };
-        }
-        const text = raw.slice(2, -2);
-        return {
-          type: "strong",
-          raw,
-          text,
-          tokens: this.lexer.inlineTokens(text)
-        };
-      }
-    }
-  }
-  codespan(src) {
-    const cap = this.rules.inline.code.exec(src);
-    if (cap) {
-      let text = cap[2].replace(/\n/g, " ");
-      const hasNonSpaceChars = /[^ ]/.test(text);
-      const hasSpaceCharsOnBothEnds = /^ /.test(text) && / $/.test(text);
-      if (hasNonSpaceChars && hasSpaceCharsOnBothEnds) {
-        text = text.substring(1, text.length - 1);
-      }
-      text = escape$1(text, true);
-      return {
-        type: "codespan",
-        raw: cap[0],
-        text
-      };
-    }
-  }
-  br(src) {
-    const cap = this.rules.inline.br.exec(src);
-    if (cap) {
-      return {
-        type: "br",
-        raw: cap[0]
-      };
-    }
-  }
-  del(src) {
-    const cap = this.rules.inline.del.exec(src);
-    if (cap) {
-      return {
-        type: "del",
-        raw: cap[0],
-        text: cap[2],
-        tokens: this.lexer.inlineTokens(cap[2])
-      };
-    }
-  }
-  autolink(src) {
-    const cap = this.rules.inline.autolink.exec(src);
-    if (cap) {
-      let text, href;
-      if (cap[2] === "@") {
-        text = escape$1(cap[1]);
-        href = "mailto:" + text;
-      } else {
-        text = escape$1(cap[1]);
-        href = text;
-      }
-      return {
-        type: "link",
-        raw: cap[0],
-        text,
-        href,
-        tokens: [
-          {
-            type: "text",
-            raw: text,
-            text
-          }
-        ]
-      };
-    }
-  }
-  url(src) {
-    let cap;
-    if (cap = this.rules.inline.url.exec(src)) {
-      let text, href;
-      if (cap[2] === "@") {
-        text = escape$1(cap[0]);
-        href = "mailto:" + text;
-      } else {
-        let prevCapZero;
-        do {
-          prevCapZero = cap[0];
-          cap[0] = this.rules.inline._backpedal.exec(cap[0])?.[0] ?? "";
-        } while (prevCapZero !== cap[0]);
-        text = escape$1(cap[0]);
-        if (cap[1] === "www.") {
-          href = "http://" + cap[0];
-        } else {
-          href = cap[0];
-        }
-      }
-      return {
-        type: "link",
-        raw: cap[0],
-        text,
-        href,
-        tokens: [
-          {
-            type: "text",
-            raw: text,
-            text
-          }
-        ]
-      };
-    }
-  }
-  inlineText(src) {
-    const cap = this.rules.inline.text.exec(src);
-    if (cap) {
-      let text;
-      if (this.lexer.state.inRawBlock) {
-        text = cap[0];
-      } else {
-        text = escape$1(cap[0]);
-      }
-      return {
-        type: "text",
-        raw: cap[0],
-        text
-      };
-    }
-  }
-}
-const newline = /^(?: *(?:\n|$))+/;
-const blockCode = /^( {4}[^\n]+(?:\n(?: *(?:\n|$))*)?)+/;
-const fences = /^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/;
-const hr = /^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/;
-const heading = /^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/;
-const bullet = /(?:[*+-]|\d{1,9}[.)])/;
-const lheading = edit(/^(?!bull |blockCode|fences|blockquote|heading|html)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html))+?)\n {0,3}(=+|-+) *(?:\n+|$)/).replace(/bull/g, bullet).replace(/blockCode/g, / {4}/).replace(/fences/g, / {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g, / {0,3}>/).replace(/heading/g, / {0,3}#{1,6}/).replace(/html/g, / {0,3}<[^\n>]+>\n/).getRegex();
-const _paragraph = /^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/;
-const blockText = /^[^\n]+/;
-const _blockLabel = /(?!\s*\])(?:\\.|[^\[\]\\])+/;
-const def = edit(/^ {0,3}\[(label)\]: *(?:\n *)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n *)?| *\n *)(title))? *(?:\n+|$)/).replace("label", _blockLabel).replace("title", /(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex();
-const list = edit(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g, bullet).getRegex();
-const _tag = "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
-const _comment = /<!--(?:-?>|[\s\S]*?(?:-->|$))/;
-const html = edit("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n *)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$))", "i").replace("comment", _comment).replace("tag", _tag).replace("attribute", / +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex();
-const paragraph = edit(_paragraph).replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("|lheading", "").replace("|table", "").replace("blockquote", " {0,3}>").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
-const blockquote = edit(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph", paragraph).getRegex();
-const blockNormal = {
-  blockquote,
-  code: blockCode,
-  def,
-  fences,
-  heading,
-  hr,
-  html,
-  lheading,
-  list,
-  newline,
-  paragraph,
-  table: noopTest,
-  text: blockText
-};
-const gfmTable = edit("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("blockquote", " {0,3}>").replace("code", " {4}[^\\n]").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
-const blockGfm = {
-  ...blockNormal,
-  table: gfmTable,
-  paragraph: edit(_paragraph).replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("|lheading", "").replace("table", gfmTable).replace("blockquote", " {0,3}>").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex()
-};
-const blockPedantic = {
-  ...blockNormal,
-  html: edit(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment", _comment).replace(/tag/g, "(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),
-  def: /^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,
-  heading: /^(#{1,6})(.*)(?:\n+|$)/,
-  fences: noopTest,
-  // fences not supported
-  lheading: /^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,
-  paragraph: edit(_paragraph).replace("hr", hr).replace("heading", " *#{1,6} *[^\n]").replace("lheading", lheading).replace("|table", "").replace("blockquote", " {0,3}>").replace("|fences", "").replace("|list", "").replace("|html", "").replace("|tag", "").getRegex()
-};
-const escape$2 = /^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/;
-const inlineCode = /^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/;
-const br = /^( {2,}|\\)\n(?!\s*$)/;
-const inlineText = /^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/;
-const _punctuation = "\\p{P}\\p{S}";
-const punctuation = edit(/^((?![*_])[\spunctuation])/, "u").replace(/punctuation/g, _punctuation).getRegex();
-const blockSkip = /\[[^[\]]*?\]\([^\(\)]*?\)|`[^`]*?`|<[^<>]*?>/g;
-const emStrongLDelim = edit(/^(?:\*+(?:((?!\*)[punct])|[^\s*]))|^_+(?:((?!_)[punct])|([^\s_]))/, "u").replace(/punct/g, _punctuation).getRegex();
-const emStrongRDelimAst = edit("^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)[punct](\\*+)(?=[\\s]|$)|[^punct\\s](\\*+)(?!\\*)(?=[punct\\s]|$)|(?!\\*)[punct\\s](\\*+)(?=[^punct\\s])|[\\s](\\*+)(?!\\*)(?=[punct])|(?!\\*)[punct](\\*+)(?!\\*)(?=[punct])|[^punct\\s](\\*+)(?=[^punct\\s])", "gu").replace(/punct/g, _punctuation).getRegex();
-const emStrongRDelimUnd = edit("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)[punct](_+)(?=[\\s]|$)|[^punct\\s](_+)(?!_)(?=[punct\\s]|$)|(?!_)[punct\\s](_+)(?=[^punct\\s])|[\\s](_+)(?!_)(?=[punct])|(?!_)[punct](_+)(?!_)(?=[punct])", "gu").replace(/punct/g, _punctuation).getRegex();
-const anyPunctuation = edit(/\\([punct])/, "gu").replace(/punct/g, _punctuation).getRegex();
-const autolink = edit(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme", /[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email", /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex();
-const _inlineComment = edit(_comment).replace("(?:-->|$)", "-->").getRegex();
-const tag = edit("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment", _inlineComment).replace("attribute", /\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex();
-const _inlineLabel = /(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/;
-const link = edit(/^!?\[(label)\]\(\s*(href)(?:\s+(title))?\s*\)/).replace("label", _inlineLabel).replace("href", /<(?:\\.|[^\n<>\\])+>|[^\s\x00-\x1f]*/).replace("title", /"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex();
-const reflink = edit(/^!?\[(label)\]\[(ref)\]/).replace("label", _inlineLabel).replace("ref", _blockLabel).getRegex();
-const nolink = edit(/^!?\[(ref)\](?:\[\])?/).replace("ref", _blockLabel).getRegex();
-const reflinkSearch = edit("reflink|nolink(?!\\()", "g").replace("reflink", reflink).replace("nolink", nolink).getRegex();
-const inlineNormal = {
-  _backpedal: noopTest,
-  // only used for GFM url
-  anyPunctuation,
-  autolink,
-  blockSkip,
-  br,
-  code: inlineCode,
-  del: noopTest,
-  emStrongLDelim,
-  emStrongRDelimAst,
-  emStrongRDelimUnd,
-  escape: escape$2,
-  link,
-  nolink,
-  punctuation,
-  reflink,
-  reflinkSearch,
-  tag,
-  text: inlineText,
-  url: noopTest
-};
-const inlinePedantic = {
-  ...inlineNormal,
-  link: edit(/^!?\[(label)\]\((.*?)\)/).replace("label", _inlineLabel).getRegex(),
-  reflink: edit(/^!?\[(label)\]\s*\[([^\]]*)\]/).replace("label", _inlineLabel).getRegex()
-};
-const inlineGfm = {
-  ...inlineNormal,
-  escape: edit(escape$2).replace("])", "~|])").getRegex(),
-  url: edit(/^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/, "i").replace("email", /[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(),
-  _backpedal: /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,
-  del: /^(~~?)(?=[^\s~])([\s\S]*?[^\s~])\1(?=[^~]|$)/,
-  text: /^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|https?:\/\/|ftp:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/
-};
-const inlineBreaks = {
-  ...inlineGfm,
-  br: edit(br).replace("{2,}", "*").getRegex(),
-  text: edit(inlineGfm.text).replace("\\b_", "\\b_| {2,}\\n").replace(/\{2,\}/g, "*").getRegex()
-};
-const block = {
-  normal: blockNormal,
-  gfm: blockGfm,
-  pedantic: blockPedantic
-};
-const inline = {
-  normal: inlineNormal,
-  gfm: inlineGfm,
-  breaks: inlineBreaks,
-  pedantic: inlinePedantic
-};
-class _Lexer {
-  tokens;
-  options;
-  state;
-  tokenizer;
-  inlineQueue;
-  constructor(options) {
-    this.tokens = [];
-    this.tokens.links = /* @__PURE__ */ Object.create(null);
-    this.options = options || _defaults;
-    this.options.tokenizer = this.options.tokenizer || new _Tokenizer();
-    this.tokenizer = this.options.tokenizer;
-    this.tokenizer.options = this.options;
-    this.tokenizer.lexer = this;
-    this.inlineQueue = [];
-    this.state = {
-      inLink: false,
-      inRawBlock: false,
-      top: true
-    };
-    const rules = {
-      block: block.normal,
-      inline: inline.normal
-    };
-    if (this.options.pedantic) {
-      rules.block = block.pedantic;
-      rules.inline = inline.pedantic;
-    } else if (this.options.gfm) {
-      rules.block = block.gfm;
-      if (this.options.breaks) {
-        rules.inline = inline.breaks;
-      } else {
-        rules.inline = inline.gfm;
-      }
-    }
-    this.tokenizer.rules = rules;
-  }
-  /**
-   * Expose Rules
-   */
-  static get rules() {
-    return {
-      block,
-      inline
-    };
-  }
-  /**
-   * Static Lex Method
-   */
-  static lex(src, options) {
-    const lexer = new _Lexer(options);
-    return lexer.lex(src);
-  }
-  /**
-   * Static Lex Inline Method
-   */
-  static lexInline(src, options) {
-    const lexer = new _Lexer(options);
-    return lexer.inlineTokens(src);
-  }
-  /**
-   * Preprocessing
-   */
-  lex(src) {
-    src = src.replace(/\r\n|\r/g, "\n");
-    this.blockTokens(src, this.tokens);
-    for (let i = 0; i < this.inlineQueue.length; i++) {
-      const next = this.inlineQueue[i];
-      this.inlineTokens(next.src, next.tokens);
-    }
-    this.inlineQueue = [];
-    return this.tokens;
-  }
-  blockTokens(src, tokens = []) {
-    if (this.options.pedantic) {
-      src = src.replace(/\t/g, "    ").replace(/^ +$/gm, "");
-    } else {
-      src = src.replace(/^( *)(\t+)/gm, (_, leading, tabs) => {
-        return leading + "    ".repeat(tabs.length);
-      });
-    }
-    let token;
-    let lastToken;
-    let cutSrc;
-    let lastParagraphClipped;
-    while (src) {
-      if (this.options.extensions && this.options.extensions.block && this.options.extensions.block.some((extTokenizer) => {
-        if (token = extTokenizer.call({ lexer: this }, src, tokens)) {
-          src = src.substring(token.raw.length);
-          tokens.push(token);
-          return true;
-        }
-        return false;
-      })) {
-        continue;
-      }
-      if (token = this.tokenizer.space(src)) {
-        src = src.substring(token.raw.length);
-        if (token.raw.length === 1 && tokens.length > 0) {
-          tokens[tokens.length - 1].raw += "\n";
-        } else {
-          tokens.push(token);
-        }
-        continue;
-      }
-      if (token = this.tokenizer.code(src)) {
-        src = src.substring(token.raw.length);
-        lastToken = tokens[tokens.length - 1];
-        if (lastToken && (lastToken.type === "paragraph" || lastToken.type === "text")) {
-          lastToken.raw += "\n" + token.raw;
-          lastToken.text += "\n" + token.text;
-          this.inlineQueue[this.inlineQueue.length - 1].src = lastToken.text;
-        } else {
-          tokens.push(token);
-        }
-        continue;
-      }
-      if (token = this.tokenizer.fences(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.heading(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.hr(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.blockquote(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.list(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.html(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.def(src)) {
-        src = src.substring(token.raw.length);
-        lastToken = tokens[tokens.length - 1];
-        if (lastToken && (lastToken.type === "paragraph" || lastToken.type === "text")) {
-          lastToken.raw += "\n" + token.raw;
-          lastToken.text += "\n" + token.raw;
-          this.inlineQueue[this.inlineQueue.length - 1].src = lastToken.text;
-        } else if (!this.tokens.links[token.tag]) {
-          this.tokens.links[token.tag] = {
-            href: token.href,
-            title: token.title
-          };
-        }
-        continue;
-      }
-      if (token = this.tokenizer.table(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.lheading(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      cutSrc = src;
-      if (this.options.extensions && this.options.extensions.startBlock) {
-        let startIndex = Infinity;
-        const tempSrc = src.slice(1);
-        let tempStart;
-        this.options.extensions.startBlock.forEach((getStartIndex) => {
-          tempStart = getStartIndex.call({ lexer: this }, tempSrc);
-          if (typeof tempStart === "number" && tempStart >= 0) {
-            startIndex = Math.min(startIndex, tempStart);
-          }
-        });
-        if (startIndex < Infinity && startIndex >= 0) {
-          cutSrc = src.substring(0, startIndex + 1);
-        }
-      }
-      if (this.state.top && (token = this.tokenizer.paragraph(cutSrc))) {
-        lastToken = tokens[tokens.length - 1];
-        if (lastParagraphClipped && lastToken.type === "paragraph") {
-          lastToken.raw += "\n" + token.raw;
-          lastToken.text += "\n" + token.text;
-          this.inlineQueue.pop();
-          this.inlineQueue[this.inlineQueue.length - 1].src = lastToken.text;
-        } else {
-          tokens.push(token);
-        }
-        lastParagraphClipped = cutSrc.length !== src.length;
-        src = src.substring(token.raw.length);
-        continue;
-      }
-      if (token = this.tokenizer.text(src)) {
-        src = src.substring(token.raw.length);
-        lastToken = tokens[tokens.length - 1];
-        if (lastToken && lastToken.type === "text") {
-          lastToken.raw += "\n" + token.raw;
-          lastToken.text += "\n" + token.text;
-          this.inlineQueue.pop();
-          this.inlineQueue[this.inlineQueue.length - 1].src = lastToken.text;
-        } else {
-          tokens.push(token);
-        }
-        continue;
-      }
-      if (src) {
-        const errMsg = "Infinite loop on byte: " + src.charCodeAt(0);
-        if (this.options.silent) {
-          console.error(errMsg);
-          break;
-        } else {
-          throw new Error(errMsg);
-        }
-      }
-    }
-    this.state.top = true;
-    return tokens;
-  }
-  inline(src, tokens = []) {
-    this.inlineQueue.push({ src, tokens });
-    return tokens;
-  }
-  /**
-   * Lexing/Compiling
-   */
-  inlineTokens(src, tokens = []) {
-    let token, lastToken, cutSrc;
-    let maskedSrc = src;
-    let match;
-    let keepPrevChar, prevChar;
-    if (this.tokens.links) {
-      const links = Object.keys(this.tokens.links);
-      if (links.length > 0) {
-        while ((match = this.tokenizer.rules.inline.reflinkSearch.exec(maskedSrc)) != null) {
-          if (links.includes(match[0].slice(match[0].lastIndexOf("[") + 1, -1))) {
-            maskedSrc = maskedSrc.slice(0, match.index) + "[" + "a".repeat(match[0].length - 2) + "]" + maskedSrc.slice(this.tokenizer.rules.inline.reflinkSearch.lastIndex);
-          }
-        }
-      }
-    }
-    while ((match = this.tokenizer.rules.inline.blockSkip.exec(maskedSrc)) != null) {
-      maskedSrc = maskedSrc.slice(0, match.index) + "[" + "a".repeat(match[0].length - 2) + "]" + maskedSrc.slice(this.tokenizer.rules.inline.blockSkip.lastIndex);
-    }
-    while ((match = this.tokenizer.rules.inline.anyPunctuation.exec(maskedSrc)) != null) {
-      maskedSrc = maskedSrc.slice(0, match.index) + "++" + maskedSrc.slice(this.tokenizer.rules.inline.anyPunctuation.lastIndex);
-    }
-    while (src) {
-      if (!keepPrevChar) {
-        prevChar = "";
-      }
-      keepPrevChar = false;
-      if (this.options.extensions && this.options.extensions.inline && this.options.extensions.inline.some((extTokenizer) => {
-        if (token = extTokenizer.call({ lexer: this }, src, tokens)) {
-          src = src.substring(token.raw.length);
-          tokens.push(token);
-          return true;
-        }
-        return false;
-      })) {
-        continue;
-      }
-      if (token = this.tokenizer.escape(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.tag(src)) {
-        src = src.substring(token.raw.length);
-        lastToken = tokens[tokens.length - 1];
-        if (lastToken && token.type === "text" && lastToken.type === "text") {
-          lastToken.raw += token.raw;
-          lastToken.text += token.text;
-        } else {
-          tokens.push(token);
-        }
-        continue;
-      }
-      if (token = this.tokenizer.link(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.reflink(src, this.tokens.links)) {
-        src = src.substring(token.raw.length);
-        lastToken = tokens[tokens.length - 1];
-        if (lastToken && token.type === "text" && lastToken.type === "text") {
-          lastToken.raw += token.raw;
-          lastToken.text += token.text;
-        } else {
-          tokens.push(token);
-        }
-        continue;
-      }
-      if (token = this.tokenizer.emStrong(src, maskedSrc, prevChar)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.codespan(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.br(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.del(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (token = this.tokenizer.autolink(src)) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      if (!this.state.inLink && (token = this.tokenizer.url(src))) {
-        src = src.substring(token.raw.length);
-        tokens.push(token);
-        continue;
-      }
-      cutSrc = src;
-      if (this.options.extensions && this.options.extensions.startInline) {
-        let startIndex = Infinity;
-        const tempSrc = src.slice(1);
-        let tempStart;
-        this.options.extensions.startInline.forEach((getStartIndex) => {
-          tempStart = getStartIndex.call({ lexer: this }, tempSrc);
-          if (typeof tempStart === "number" && tempStart >= 0) {
-            startIndex = Math.min(startIndex, tempStart);
-          }
-        });
-        if (startIndex < Infinity && startIndex >= 0) {
-          cutSrc = src.substring(0, startIndex + 1);
-        }
-      }
-      if (token = this.tokenizer.inlineText(cutSrc)) {
-        src = src.substring(token.raw.length);
-        if (token.raw.slice(-1) !== "_") {
-          prevChar = token.raw.slice(-1);
-        }
-        keepPrevChar = true;
-        lastToken = tokens[tokens.length - 1];
-        if (lastToken && lastToken.type === "text") {
-          lastToken.raw += token.raw;
-          lastToken.text += token.text;
-        } else {
-          tokens.push(token);
-        }
-        continue;
-      }
-      if (src) {
-        const errMsg = "Infinite loop on byte: " + src.charCodeAt(0);
-        if (this.options.silent) {
-          console.error(errMsg);
-          break;
-        } else {
-          throw new Error(errMsg);
-        }
-      }
-    }
-    return tokens;
-  }
-}
-class _Renderer {
-  options;
-  constructor(options) {
-    this.options = options || _defaults;
-  }
-  code(code, infostring, escaped) {
-    const lang = (infostring || "").match(/^\S*/)?.[0];
-    code = code.replace(/\n$/, "") + "\n";
-    if (!lang) {
-      return "<pre><code>" + (escaped ? code : escape$1(code, true)) + "</code></pre>\n";
-    }
-    return '<pre><code class="language-' + escape$1(lang) + '">' + (escaped ? code : escape$1(code, true)) + "</code></pre>\n";
-  }
-  blockquote(quote) {
-    return `<blockquote>
-${quote}</blockquote>
-`;
-  }
-  html(html2, block2) {
-    return html2;
-  }
-  heading(text, level, raw) {
-    return `<h${level}>${text}</h${level}>
-`;
-  }
-  hr() {
-    return "<hr>\n";
-  }
-  list(body, ordered, start) {
-    const type = ordered ? "ol" : "ul";
-    const startatt = ordered && start !== 1 ? ' start="' + start + '"' : "";
-    return "<" + type + startatt + ">\n" + body + "</" + type + ">\n";
-  }
-  listitem(text, task, checked) {
-    return `<li>${text}</li>
-`;
-  }
-  checkbox(checked) {
-    return "<input " + (checked ? 'checked="" ' : "") + 'disabled="" type="checkbox">';
-  }
-  paragraph(text) {
-    return `<p>${text}</p>
-`;
-  }
-  table(header, body) {
-    if (body)
-      body = `<tbody>${body}</tbody>`;
-    return "<table>\n<thead>\n" + header + "</thead>\n" + body + "</table>\n";
-  }
-  tablerow(content) {
-    return `<tr>
-${content}</tr>
-`;
-  }
-  tablecell(content, flags) {
-    const type = flags.header ? "th" : "td";
-    const tag2 = flags.align ? `<${type} align="${flags.align}">` : `<${type}>`;
-    return tag2 + content + `</${type}>
-`;
-  }
-  /**
-   * span level renderer
-   */
-  strong(text) {
-    return `<strong>${text}</strong>`;
-  }
-  em(text) {
-    return `<em>${text}</em>`;
-  }
-  codespan(text) {
-    return `<code>${text}</code>`;
-  }
-  br() {
-    return "<br>";
-  }
-  del(text) {
-    return `<del>${text}</del>`;
-  }
-  link(href, title, text) {
-    const cleanHref = cleanUrl(href);
-    if (cleanHref === null) {
-      return text;
-    }
-    href = cleanHref;
-    let out = '<a href="' + href + '"';
-    if (title) {
-      out += ' title="' + title + '"';
-    }
-    out += ">" + text + "</a>";
-    return out;
-  }
-  image(href, title, text) {
-    const cleanHref = cleanUrl(href);
-    if (cleanHref === null) {
-      return text;
-    }
-    href = cleanHref;
-    let out = `<img src="${href}" alt="${text}"`;
-    if (title) {
-      out += ` title="${title}"`;
-    }
-    out += ">";
-    return out;
-  }
-  text(text) {
-    return text;
-  }
-}
-class _TextRenderer {
-  // no need for block level renderers
-  strong(text) {
-    return text;
-  }
-  em(text) {
-    return text;
-  }
-  codespan(text) {
-    return text;
-  }
-  del(text) {
-    return text;
-  }
-  html(text) {
-    return text;
-  }
-  text(text) {
-    return text;
-  }
-  link(href, title, text) {
-    return "" + text;
-  }
-  image(href, title, text) {
-    return "" + text;
-  }
-  br() {
-    return "";
-  }
-}
-class _Parser {
-  options;
-  renderer;
-  textRenderer;
-  constructor(options) {
-    this.options = options || _defaults;
-    this.options.renderer = this.options.renderer || new _Renderer();
-    this.renderer = this.options.renderer;
-    this.renderer.options = this.options;
-    this.textRenderer = new _TextRenderer();
-  }
-  /**
-   * Static Parse Method
-   */
-  static parse(tokens, options) {
-    const parser = new _Parser(options);
-    return parser.parse(tokens);
-  }
-  /**
-   * Static Parse Inline Method
-   */
-  static parseInline(tokens, options) {
-    const parser = new _Parser(options);
-    return parser.parseInline(tokens);
-  }
-  /**
-   * Parse Loop
-   */
-  parse(tokens, top = true) {
-    let out = "";
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i];
-      if (this.options.extensions && this.options.extensions.renderers && this.options.extensions.renderers[token.type]) {
-        const genericToken = token;
-        const ret = this.options.extensions.renderers[genericToken.type].call({ parser: this }, genericToken);
-        if (ret !== false || !["space", "hr", "heading", "code", "table", "blockquote", "list", "html", "paragraph", "text"].includes(genericToken.type)) {
-          out += ret || "";
-          continue;
-        }
-      }
-      switch (token.type) {
-        case "space": {
-          continue;
-        }
-        case "hr": {
-          out += this.renderer.hr();
-          continue;
-        }
-        case "heading": {
-          const headingToken = token;
-          out += this.renderer.heading(this.parseInline(headingToken.tokens), headingToken.depth, unescape$1(this.parseInline(headingToken.tokens, this.textRenderer)));
-          continue;
-        }
-        case "code": {
-          const codeToken = token;
-          out += this.renderer.code(codeToken.text, codeToken.lang, !!codeToken.escaped);
-          continue;
-        }
-        case "table": {
-          const tableToken = token;
-          let header = "";
-          let cell = "";
-          for (let j = 0; j < tableToken.header.length; j++) {
-            cell += this.renderer.tablecell(this.parseInline(tableToken.header[j].tokens), { header: true, align: tableToken.align[j] });
-          }
-          header += this.renderer.tablerow(cell);
-          let body = "";
-          for (let j = 0; j < tableToken.rows.length; j++) {
-            const row = tableToken.rows[j];
-            cell = "";
-            for (let k2 = 0; k2 < row.length; k2++) {
-              cell += this.renderer.tablecell(this.parseInline(row[k2].tokens), { header: false, align: tableToken.align[k2] });
-            }
-            body += this.renderer.tablerow(cell);
-          }
-          out += this.renderer.table(header, body);
-          continue;
-        }
-        case "blockquote": {
-          const blockquoteToken = token;
-          const body = this.parse(blockquoteToken.tokens);
-          out += this.renderer.blockquote(body);
-          continue;
-        }
-        case "list": {
-          const listToken = token;
-          const ordered = listToken.ordered;
-          const start = listToken.start;
-          const loose = listToken.loose;
-          let body = "";
-          for (let j = 0; j < listToken.items.length; j++) {
-            const item = listToken.items[j];
-            const checked = item.checked;
-            const task = item.task;
-            let itemBody = "";
-            if (item.task) {
-              const checkbox = this.renderer.checkbox(!!checked);
-              if (loose) {
-                if (item.tokens.length > 0 && item.tokens[0].type === "paragraph") {
-                  item.tokens[0].text = checkbox + " " + item.tokens[0].text;
-                  if (item.tokens[0].tokens && item.tokens[0].tokens.length > 0 && item.tokens[0].tokens[0].type === "text") {
-                    item.tokens[0].tokens[0].text = checkbox + " " + item.tokens[0].tokens[0].text;
-                  }
-                } else {
-                  item.tokens.unshift({
-                    type: "text",
-                    text: checkbox + " "
-                  });
-                }
-              } else {
-                itemBody += checkbox + " ";
-              }
-            }
-            itemBody += this.parse(item.tokens, loose);
-            body += this.renderer.listitem(itemBody, task, !!checked);
-          }
-          out += this.renderer.list(body, ordered, start);
-          continue;
-        }
-        case "html": {
-          const htmlToken = token;
-          out += this.renderer.html(htmlToken.text, htmlToken.block);
-          continue;
-        }
-        case "paragraph": {
-          const paragraphToken = token;
-          out += this.renderer.paragraph(this.parseInline(paragraphToken.tokens));
-          continue;
-        }
-        case "text": {
-          let textToken = token;
-          let body = textToken.tokens ? this.parseInline(textToken.tokens) : textToken.text;
-          while (i + 1 < tokens.length && tokens[i + 1].type === "text") {
-            textToken = tokens[++i];
-            body += "\n" + (textToken.tokens ? this.parseInline(textToken.tokens) : textToken.text);
-          }
-          out += top ? this.renderer.paragraph(body) : body;
-          continue;
-        }
-        default: {
-          const errMsg = 'Token with "' + token.type + '" type was not found.';
-          if (this.options.silent) {
-            console.error(errMsg);
-            return "";
-          } else {
-            throw new Error(errMsg);
-          }
-        }
-      }
-    }
-    return out;
-  }
-  /**
-   * Parse Inline Tokens
-   */
-  parseInline(tokens, renderer) {
-    renderer = renderer || this.renderer;
-    let out = "";
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i];
-      if (this.options.extensions && this.options.extensions.renderers && this.options.extensions.renderers[token.type]) {
-        const ret = this.options.extensions.renderers[token.type].call({ parser: this }, token);
-        if (ret !== false || !["escape", "html", "link", "image", "strong", "em", "codespan", "br", "del", "text"].includes(token.type)) {
-          out += ret || "";
-          continue;
-        }
-      }
-      switch (token.type) {
-        case "escape": {
-          const escapeToken = token;
-          out += renderer.text(escapeToken.text);
-          break;
-        }
-        case "html": {
-          const tagToken = token;
-          out += renderer.html(tagToken.text);
-          break;
-        }
-        case "link": {
-          const linkToken = token;
-          out += renderer.link(linkToken.href, linkToken.title, this.parseInline(linkToken.tokens, renderer));
-          break;
-        }
-        case "image": {
-          const imageToken = token;
-          out += renderer.image(imageToken.href, imageToken.title, imageToken.text);
-          break;
-        }
-        case "strong": {
-          const strongToken = token;
-          out += renderer.strong(this.parseInline(strongToken.tokens, renderer));
-          break;
-        }
-        case "em": {
-          const emToken = token;
-          out += renderer.em(this.parseInline(emToken.tokens, renderer));
-          break;
-        }
-        case "codespan": {
-          const codespanToken = token;
-          out += renderer.codespan(codespanToken.text);
-          break;
-        }
-        case "br": {
-          out += renderer.br();
-          break;
-        }
-        case "del": {
-          const delToken = token;
-          out += renderer.del(this.parseInline(delToken.tokens, renderer));
-          break;
-        }
-        case "text": {
-          const textToken = token;
-          out += renderer.text(textToken.text);
-          break;
-        }
-        default: {
-          const errMsg = 'Token with "' + token.type + '" type was not found.';
-          if (this.options.silent) {
-            console.error(errMsg);
-            return "";
-          } else {
-            throw new Error(errMsg);
-          }
-        }
-      }
-    }
-    return out;
-  }
-}
-class _Hooks {
-  options;
-  constructor(options) {
-    this.options = options || _defaults;
-  }
-  static passThroughHooks = /* @__PURE__ */ new Set([
-    "preprocess",
-    "postprocess",
-    "processAllTokens"
-  ]);
-  /**
-   * Process markdown before marked
-   */
-  preprocess(markdown) {
-    return markdown;
-  }
-  /**
-   * Process HTML after marked is finished
-   */
-  postprocess(html2) {
-    return html2;
-  }
-  /**
-   * Process all tokens before walk tokens
-   */
-  processAllTokens(tokens) {
-    return tokens;
-  }
-}
-class Marked {
-  defaults = _getDefaults();
-  options = this.setOptions;
-  parse = this.#parseMarkdown(_Lexer.lex, _Parser.parse);
-  parseInline = this.#parseMarkdown(_Lexer.lexInline, _Parser.parseInline);
-  Parser = _Parser;
-  Renderer = _Renderer;
-  TextRenderer = _TextRenderer;
-  Lexer = _Lexer;
-  Tokenizer = _Tokenizer;
-  Hooks = _Hooks;
-  constructor(...args) {
-    this.use(...args);
-  }
-  /**
-   * Run callback for every token
-   */
-  walkTokens(tokens, callback2) {
-    let values = [];
-    for (const token of tokens) {
-      values = values.concat(callback2.call(this, token));
-      switch (token.type) {
-        case "table": {
-          const tableToken = token;
-          for (const cell of tableToken.header) {
-            values = values.concat(this.walkTokens(cell.tokens, callback2));
-          }
-          for (const row of tableToken.rows) {
-            for (const cell of row) {
-              values = values.concat(this.walkTokens(cell.tokens, callback2));
-            }
-          }
-          break;
-        }
-        case "list": {
-          const listToken = token;
-          values = values.concat(this.walkTokens(listToken.items, callback2));
-          break;
-        }
-        default: {
-          const genericToken = token;
-          if (this.defaults.extensions?.childTokens?.[genericToken.type]) {
-            this.defaults.extensions.childTokens[genericToken.type].forEach((childTokens) => {
-              const tokens2 = genericToken[childTokens].flat(Infinity);
-              values = values.concat(this.walkTokens(tokens2, callback2));
-            });
-          } else if (genericToken.tokens) {
-            values = values.concat(this.walkTokens(genericToken.tokens, callback2));
-          }
-        }
-      }
-    }
-    return values;
-  }
-  use(...args) {
-    const extensions = this.defaults.extensions || { renderers: {}, childTokens: {} };
-    args.forEach((pack) => {
-      const opts = { ...pack };
-      opts.async = this.defaults.async || opts.async || false;
-      if (pack.extensions) {
-        pack.extensions.forEach((ext) => {
-          if (!ext.name) {
-            throw new Error("extension name required");
-          }
-          if ("renderer" in ext) {
-            const prevRenderer = extensions.renderers[ext.name];
-            if (prevRenderer) {
-              extensions.renderers[ext.name] = function(...args2) {
-                let ret = ext.renderer.apply(this, args2);
-                if (ret === false) {
-                  ret = prevRenderer.apply(this, args2);
-                }
-                return ret;
-              };
-            } else {
-              extensions.renderers[ext.name] = ext.renderer;
-            }
-          }
-          if ("tokenizer" in ext) {
-            if (!ext.level || ext.level !== "block" && ext.level !== "inline") {
-              throw new Error("extension level must be 'block' or 'inline'");
-            }
-            const extLevel = extensions[ext.level];
-            if (extLevel) {
-              extLevel.unshift(ext.tokenizer);
-            } else {
-              extensions[ext.level] = [ext.tokenizer];
-            }
-            if (ext.start) {
-              if (ext.level === "block") {
-                if (extensions.startBlock) {
-                  extensions.startBlock.push(ext.start);
-                } else {
-                  extensions.startBlock = [ext.start];
-                }
-              } else if (ext.level === "inline") {
-                if (extensions.startInline) {
-                  extensions.startInline.push(ext.start);
-                } else {
-                  extensions.startInline = [ext.start];
-                }
-              }
-            }
-          }
-          if ("childTokens" in ext && ext.childTokens) {
-            extensions.childTokens[ext.name] = ext.childTokens;
-          }
-        });
-        opts.extensions = extensions;
-      }
-      if (pack.renderer) {
-        const renderer = this.defaults.renderer || new _Renderer(this.defaults);
-        for (const prop in pack.renderer) {
-          if (!(prop in renderer)) {
-            throw new Error(`renderer '${prop}' does not exist`);
-          }
-          if (prop === "options") {
-            continue;
-          }
-          const rendererProp = prop;
-          const rendererFunc = pack.renderer[rendererProp];
-          const prevRenderer = renderer[rendererProp];
-          renderer[rendererProp] = (...args2) => {
-            let ret = rendererFunc.apply(renderer, args2);
-            if (ret === false) {
-              ret = prevRenderer.apply(renderer, args2);
-            }
-            return ret || "";
-          };
-        }
-        opts.renderer = renderer;
-      }
-      if (pack.tokenizer) {
-        const tokenizer = this.defaults.tokenizer || new _Tokenizer(this.defaults);
-        for (const prop in pack.tokenizer) {
-          if (!(prop in tokenizer)) {
-            throw new Error(`tokenizer '${prop}' does not exist`);
-          }
-          if (["options", "rules", "lexer"].includes(prop)) {
-            continue;
-          }
-          const tokenizerProp = prop;
-          const tokenizerFunc = pack.tokenizer[tokenizerProp];
-          const prevTokenizer = tokenizer[tokenizerProp];
-          tokenizer[tokenizerProp] = (...args2) => {
-            let ret = tokenizerFunc.apply(tokenizer, args2);
-            if (ret === false) {
-              ret = prevTokenizer.apply(tokenizer, args2);
-            }
-            return ret;
-          };
-        }
-        opts.tokenizer = tokenizer;
-      }
-      if (pack.hooks) {
-        const hooks = this.defaults.hooks || new _Hooks();
-        for (const prop in pack.hooks) {
-          if (!(prop in hooks)) {
-            throw new Error(`hook '${prop}' does not exist`);
-          }
-          if (prop === "options") {
-            continue;
-          }
-          const hooksProp = prop;
-          const hooksFunc = pack.hooks[hooksProp];
-          const prevHook = hooks[hooksProp];
-          if (_Hooks.passThroughHooks.has(prop)) {
-            hooks[hooksProp] = (arg) => {
-              if (this.defaults.async) {
-                return Promise.resolve(hooksFunc.call(hooks, arg)).then((ret2) => {
-                  return prevHook.call(hooks, ret2);
-                });
-              }
-              const ret = hooksFunc.call(hooks, arg);
-              return prevHook.call(hooks, ret);
-            };
-          } else {
-            hooks[hooksProp] = (...args2) => {
-              let ret = hooksFunc.apply(hooks, args2);
-              if (ret === false) {
-                ret = prevHook.apply(hooks, args2);
-              }
-              return ret;
-            };
-          }
-        }
-        opts.hooks = hooks;
-      }
-      if (pack.walkTokens) {
-        const walkTokens = this.defaults.walkTokens;
-        const packWalktokens = pack.walkTokens;
-        opts.walkTokens = function(token) {
-          let values = [];
-          values.push(packWalktokens.call(this, token));
-          if (walkTokens) {
-            values = values.concat(walkTokens.call(this, token));
-          }
-          return values;
-        };
-      }
-      this.defaults = { ...this.defaults, ...opts };
-    });
-    return this;
-  }
-  setOptions(opt) {
-    this.defaults = { ...this.defaults, ...opt };
-    return this;
-  }
-  lexer(src, options) {
-    return _Lexer.lex(src, options ?? this.defaults);
-  }
-  parser(tokens, options) {
-    return _Parser.parse(tokens, options ?? this.defaults);
-  }
-  #parseMarkdown(lexer, parser) {
-    return (src, options) => {
-      const origOpt = { ...options };
-      const opt = { ...this.defaults, ...origOpt };
-      if (this.defaults.async === true && origOpt.async === false) {
-        if (!opt.silent) {
-          console.warn("marked(): The async option was set to true by an extension. The async: false option sent to parse will be ignored.");
-        }
-        opt.async = true;
-      }
-      const throwError = this.#onError(!!opt.silent, !!opt.async);
-      if (typeof src === "undefined" || src === null) {
-        return throwError(new Error("marked(): input parameter is undefined or null"));
-      }
-      if (typeof src !== "string") {
-        return throwError(new Error("marked(): input parameter is of type " + Object.prototype.toString.call(src) + ", string expected"));
-      }
-      if (opt.hooks) {
-        opt.hooks.options = opt;
-      }
-      if (opt.async) {
-        return Promise.resolve(opt.hooks ? opt.hooks.preprocess(src) : src).then((src2) => lexer(src2, opt)).then((tokens) => opt.hooks ? opt.hooks.processAllTokens(tokens) : tokens).then((tokens) => opt.walkTokens ? Promise.all(this.walkTokens(tokens, opt.walkTokens)).then(() => tokens) : tokens).then((tokens) => parser(tokens, opt)).then((html2) => opt.hooks ? opt.hooks.postprocess(html2) : html2).catch(throwError);
-      }
-      try {
-        if (opt.hooks) {
-          src = opt.hooks.preprocess(src);
-        }
-        let tokens = lexer(src, opt);
-        if (opt.hooks) {
-          tokens = opt.hooks.processAllTokens(tokens);
-        }
-        if (opt.walkTokens) {
-          this.walkTokens(tokens, opt.walkTokens);
-        }
-        let html2 = parser(tokens, opt);
-        if (opt.hooks) {
-          html2 = opt.hooks.postprocess(html2);
-        }
-        return html2;
-      } catch (e) {
-        return throwError(e);
-      }
-    };
-  }
-  #onError(silent, async) {
-    return (e) => {
-      e.message += "\nPlease report this to https://github.com/markedjs/marked.";
-      if (silent) {
-        const msg = "<p>An error occurred:</p><pre>" + escape$1(e.message + "", true) + "</pre>";
-        if (async) {
-          return Promise.resolve(msg);
-        }
-        return msg;
-      }
-      if (async) {
-        return Promise.reject(e);
-      }
-      throw e;
-    };
-  }
-}
-const markedInstance = new Marked();
-function marked(src, opt) {
-  return markedInstance.parse(src, opt);
-}
-marked.options = marked.setOptions = function(options) {
-  markedInstance.setOptions(options);
-  marked.defaults = markedInstance.defaults;
-  changeDefaults(marked.defaults);
-  return marked;
-};
-marked.getDefaults = _getDefaults;
-marked.defaults = _defaults;
-marked.use = function(...args) {
-  markedInstance.use(...args);
-  marked.defaults = markedInstance.defaults;
-  changeDefaults(marked.defaults);
-  return marked;
-};
-marked.walkTokens = function(tokens, callback2) {
-  return markedInstance.walkTokens(tokens, callback2);
-};
-marked.parseInline = markedInstance.parseInline;
-marked.Parser = _Parser;
-marked.parser = _Parser.parse;
-marked.Renderer = _Renderer;
-marked.TextRenderer = _TextRenderer;
-marked.Lexer = _Lexer;
-marked.lexer = _Lexer.lex;
-marked.Tokenizer = _Tokenizer;
-marked.Hooks = _Hooks;
-marked.parse = marked;
-marked.options;
-marked.setOptions;
-marked.use;
-marked.walkTokens;
-marked.parseInline;
-_Parser.parse;
-_Lexer.lex;
 Chart.register(ArcElement, plugin_tooltip, plugin_legend, DoughnutController);
+function stripMarkdown(text) {
+  if (!text) return "";
+  return text.replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/```[\s\S]*?```/g, "").replace(/#{1,6}\s+/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^\s*[-*+]\s+/gm, "").replace(/^\s*\d+[.)\s]+\s*/gm, "").replace(/^\s*>\s+/gm, "").replace(/\n{2,}/g, " ").replace(/\n/g, " ").replace(/\s{2,}/g, " ").trim();
+}
 function formatRecommendation(text) {
-  const parts = text.split(/(?:^|\s)(?:\d+[).])\s+/u).map((s) => s.trim()).filter(Boolean);
+  const clean = stripMarkdown(text);
+  const parts = clean.split(/(?:^|\s)(?:\d+[).])\s+/u).map((s) => s.trim()).filter(Boolean);
   if (parts.length > 1) return parts;
-  const semi = text.split(/;\s*/).map((s) => s.trim()).filter(Boolean);
+  const semi = clean.split(/;\s*/).map((s) => s.trim()).filter(Boolean);
   if (semi.length > 1) return semi;
-  return [text];
+  return [clean];
 }
 function ResultsModal() {
   const { currentResult, showResultsModal, setShowResultsModal, addLog } = useStore();
@@ -41751,13 +40983,7 @@ function ResultsModal() {
             const pct = Math.round(c.score / c.maxScore * 100);
             const barColor = pct >= 80 ? "bg-emerald-500" : pct >= 50 ? "bg-amber-500" : "bg-red-500";
             const scoreColor = pct >= 80 ? "text-emerald-600" : pct >= 50 ? "text-amber-600" : "text-red-600";
-            const feedbackHtml = (() => {
-              try {
-                return marked.parse(c.justification);
-              } catch {
-                return `<p>${c.justification}</p>`;
-              }
-            })();
+            const feedbackText = stripMarkdown(c.justification);
             return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "bg-slate-50 rounded-xl border border-slate-200 p-4", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between mb-2", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
@@ -41786,22 +41012,22 @@ function ResultsModal() {
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "div",
                 {
-                  className: "text-xs text-slate-600 prose prose-xs max-w-none mb-2",
-                  dangerouslySetInnerHTML: { __html: feedbackHtml }
+                  className: "text-xs text-slate-600 mb-2 whitespace-pre-wrap",
+                  children: feedbackText
                 }
               ),
               c.recommendations && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-blue-700 bg-blue-50 rounded-lg px-3 py-1.5 border border-blue-100 mb-2", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("i", { className: "fa-solid fa-lightbulb mr-1" }),
-                c.recommendations
+                stripMarkdown(c.recommendations)
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-3 flex-wrap", children: [
                 c.strengths.map((s, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full", children: [
                   "+ ",
-                  s
+                  stripMarkdown(s)
                 ] }, i)),
                 c.weaknesses.map((w2, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full", children: [
                   "− ",
-                  w2
+                  stripMarkdown(w2)
                 ] }, i))
               ] })
             ] }, c.criterionName);
@@ -42140,7 +41366,7 @@ function HelpPanel({ onClose }) {
             body: "Это инструкция для ИИ: «что именно проверять». Чем конкретнее — тем точнее оценка.",
             list: ["Наличие введения, постановки задачи и заключения", "Корректность формул и вычислений", "Ссылки на источники, список литературы ГОСТ"]
           }
-        ].map(({ n: n2, color: color2, title, body, extra, list: list2 }) => /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
+        ].map(({ n: n2, color: color2, title, body, extra, list }) => /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("h4", { className: "text-sm font-bold text-slate-800 flex items-center gap-2 mb-2", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${color2}`, children: n2 }),
             title
@@ -42148,7 +41374,7 @@ function HelpPanel({ onClose }) {
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pl-8", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-600 leading-relaxed", children: body }),
             extra,
-            list2 && /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { className: "mt-1.5 space-y-1 text-xs text-slate-500 list-disc list-inside", children: list2.map((item, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("li", { children: item }, i)) })
+            list && /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { className: "mt-1.5 space-y-1 text-xs text-slate-500 list-disc list-inside", children: list.map((item, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("li", { children: item }, i)) })
           ] })
         ] }, n2)),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "bg-amber-50 border border-amber-100 rounded-xl p-3.5", children: [
@@ -42518,7 +41744,8 @@ client.createRoot(document.getElementById("root")).render(
   /* @__PURE__ */ jsxRuntimeExports.jsx(React$2.StrictMode, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(App, {}) })
 );
 export {
-  commonjsRequire as a,
+  getDefaultExportFromCjs as a,
+  commonjsRequire as b,
   commonjsGlobal as c,
   getAugmentedNamespace as g
 };

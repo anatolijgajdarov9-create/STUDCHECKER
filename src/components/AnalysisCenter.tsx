@@ -3,12 +3,23 @@ import { useStore, getSelectedRubric } from '../store/useStore'
 import {
   evaluateCriterion,
   calculateFinalScore,
-  summarizeCriteria
+  summarizeCriteria,
+  runPlanner,
+  waitForServerReady
 } from '../services/llamaApi'
+import { extractImagesFromDocument, analyzeImages, buildImageContext, type ExtractedImage, type ImageAnalysis } from '../services/imageAnalyzer'
 import { runPlagiarismCheck } from '../services/plagiarismChecker'
-import { parseModels, assignModels, uniqueModelNames, analyzeContent } from '../services/modelSelector'
+import { 
+  parseModels, 
+  assignModels, 
+  uniqueModelNames, 
+  analyzeContent,
+  findModelByName,
+  findClosestModel,
+  buildModelsDescription
+} from '../services/modelSelector'
 import { addToKnowledgeBase, findSimilar, buildRagContext, getKnowledgeBase } from '../services/ragService'
-import type { CriterionResult, ExpertStep, AiModel, RubricCriterion } from '../types'
+import type { CriterionResult, ExpertStep, AiModel, RubricCriterion, PlanItem, ExecutionPlan } from '../types'
 import TutorialModal from './TutorialModal'
 import type { TutorialStep } from './TutorialModal'
 
@@ -55,6 +66,8 @@ export default function AnalysisCenter() {
   const [liveCriteriaResults, setLiveCriteriaResults] = useState<CriterionResult[]>([])
   const [currentCriteriaNames, setCurrentCriteriaNames] = useState<string[]>([])
   const [showInfo, setShowInfo] = useState(false)
+  const [extractedImages, setExtractedImages] = useState<ExtractedImage[]>([])
+  const [imageAnalyses, setImageAnalyses] = useState<ImageAnalysis[]>([])
 
   const startAnalysis = async () => {
     if (!canStart || !selectedRubric) return
@@ -62,6 +75,8 @@ export default function AnalysisCenter() {
     setAnalyzing(true)
     setProgress(0)
     setLiveCriteriaResults([])
+    setExtractedImages([])
+    setImageAnalyses([])
 
     const criteria = selectedRubric.criteria
     const total = criteria.length
@@ -72,6 +87,7 @@ export default function AnalysisCenter() {
     let modelAssignment: Map<string, AiModel> | null = null
     let firstModel: AiModel | null = null
     let modelsLabel = selectedModelId ?? 'unknown'
+    let aiModels: AiModel[] = []
 
     // Analyse the first file's content before model assignment
     const firstContent = fileQueue[0]?.content ?? ''
@@ -89,7 +105,7 @@ export default function AnalysisCenter() {
           return
         }
 
-        const aiModels = parseModels(listResult.models)
+        aiModels = parseModels(listResult.models)
         addLog(`Найдено моделей: ${aiModels.length} — ${aiModels.map((m) => m.displayName).join(', ')}`, 'success')
 
         // Content analysis — determines domain and complexity before assignment
@@ -115,6 +131,27 @@ export default function AnalysisCenter() {
           .filter(Boolean)
           .join(' | ')
         addLog(`Распределение моделей: ${assignmentLines}`, 'info')
+      } else if (!isElectron && config.llamaUrl) {
+        addLog('Попытка получить список моделей с llama-server...', 'info')
+        try {
+          const response = await fetch(`${config.llamaUrl}/v1/models`)
+          if (response.ok) {
+            const data = await response.json()
+            if (data.data && data.data.length > 0) {
+              aiModels = data.data.map((m: { id: string }) => ({
+                fileName: m.id,
+                path: m.id,
+                size: 0,
+                sizeLabel: 'API',
+                displayName: m.id,
+                capability: 50
+              }))
+              addLog(`API модели: ${aiModels.length} — ${aiModels.map((m) => m.displayName).join(', ')}`, 'success')
+            }
+          }
+        } catch (e) {
+          addLog('Не удалось получить модели с API', 'warning')
+        }
       }
 
       const activeModelId = isElectron ? 'local' : (selectedModelId ?? '')
@@ -146,11 +183,15 @@ export default function AnalysisCenter() {
         }
 
         setLiveCriteriaResults([])
+        setExtractedImages([])
+        setImageAnalyses([])
         const criteriaNames = criteria.map((c) => c.name)
         setCurrentCriteriaNames(criteriaNames)
 
         const steps: ExpertStep[] = [
           { id: 'planner', name: 'Планировщик', status: 'pending' },
+          { id: 'image-extraction', name: 'Извлечение изображений', status: 'pending' },
+          { id: 'image-analysis', name: 'Анализ изображений', status: 'pending' },
           ...criteria.map((c, i) => ({
             id: `expert-${i}`,
             name: c.name,
@@ -170,25 +211,182 @@ export default function AnalysisCenter() {
 
         addLog(`Текст: ${fileContent.length} символов, критериев: ${total}`, 'info')
 
-        // ── Планировщик ────────────────────────────────────────────────────
+        // ── Загрузка модели для планировщика ──────────────────────────────────
+        // Планировщику нужна модель — загружаем самую мощную
+        if (isElectron && firstModel) {
+          updateExpertStep('planner', { status: 'loading', modelName: firstModel.displayName })
+          addLog(`Загрузка модели для планировщика: ${firstModel.displayName}...`, 'info')
+          try {
+            const sw = await window.electronAPI!.switchLlamaModel(firstModel.path, port)
+            if (!sw.success) {
+              addLog(`Не удалось загрузить модель: ${sw.error}`, 'error')
+              setAnalyzing(false)
+              return
+            }
+            addLog(`Модель загружена`, 'success')
+            setConnected(true)
+          } catch (e) {
+            const err = e instanceof Error ? e.message : String(e)
+            addLog(`Ошибка загрузки модели: ${err}`, 'error')
+            setAnalyzing(false)
+            return
+          }
+        }
+
+        // ── Планировщик (LLM с умным планированием) ──────────────────────
         updateExpertStep('planner', { status: 'running' })
         addLog(`Планировщик: анализ документа «${fileName}»...`, 'info')
 
-        // Artificial delay so the planner animation is visible
-        await new Promise<void>((r) => setTimeout(r, 2000))
+        let executionPlan: ExecutionPlan = { steps: [], estimatedSwitches: 0, recommendedFirstModel: '' }
 
-        const wordCount = fileContent.split(/\s+/).filter(Boolean).length
-        const plannerPrompt =
-          `Файл: ${fileName}\n` +
-          `Размер: ${fileContent.length} символов, ~${wordCount} слов\n` +
-          `Критериев в рубрике: ${total}\n` +
-          `Рубрика: ${selectedRubric.name}`
-        const plannerResponse = criteria
-          .map((c, i) => `${i + 1}. ${c.name} (вес ${c.weight}%, макс ${c.maxScore} б) — ${c.description}`)
-          .join('\n')
-        addRequestLog({ criterion: 'Планировщик', prompt: plannerPrompt, response: plannerResponse, durationMs: 0, status: 'ok' })
-        addLog(`Планировщик: готово — ${wordCount} слов, ${total} критериев`, 'success')
+        try {
+          executionPlan = await runPlanner(apiConfig, selectedRubric, fileContent, aiModels)
+
+          if (executionPlan.steps.length > 0) {
+            addLog(`Планировщик: ${executionPlan.steps.length} шагов, ~${executionPlan.estimatedSwitches} переключений модели`, 'success')
+
+            const assignmentLines: string[] = []
+            for (const step of executionPlan.steps) {
+              const criterion = criteria.find(c => c.name === step.criterion)
+              if (!criterion) continue
+
+              const model = aiModels.find(m => m.fileName === step.recommendedModel)
+              if (model) {
+                const switchMark = step.isModelSwitch ? ' [перекл.]' : ''
+                const rationale = step.modelRationale ? ` (${step.modelRationale.substring(0, 40)})` : ''
+                assignmentLines.push(`${step.criterion}: ${model.displayName}${switchMark}${rationale}`)
+              }
+            }
+            addLog(`План выполнения: ${assignmentLines.join(' | ')}`, 'info')
+
+            const plannerLog = {
+              criterion: 'Планировщик',
+              prompt: `Файл: ${fileName}\nМодели: ${aiModels.map(m => `${m.displayName} (${m.sizeLabel})`).join(', ')}\nКритерии: ${criteria.map(c => c.name).join(', ')}`,
+              response: executionPlan.steps.map(s => 
+                `Шаг ${s.step}: ${s.criterion} → ${s.recommendedModel} (${s.isModelSwitch ? 'переключение' : 'та же модель'})`
+              ).join('\n'),
+              durationMs: 0,
+              status: 'ok' as const
+            }
+            addRequestLog(plannerLog)
+          }
+        } catch (e) {
+          const err = e instanceof Error ? e.message : String(e)
+          addLog(`Планировщик: ошибка — ${err}`, 'error')
+          
+          const defaultModel = aiModels[0]?.fileName || 'default'
+          const defaultCapability = aiModels[0]?.capability || 50
+          
+          executionPlan = {
+            steps: criteria.map((c, i) => ({
+              criterion: c.name,
+              criterionId: c.id,
+              prompt: `Оцени критерий "${c.name}" (${c.description}).`,
+              maxScore: c.maxScore,
+              recommendedModel: defaultModel,
+              modelRationale: 'Модель по умолчанию',
+              complexity: 'medium' as const,
+              step: i + 1,
+              isModelSwitch: i > 0,
+              contextLimit: defaultCapability < 40 ? 800 : defaultCapability < 60 ? 1200 : 1800,
+              maxTokens: defaultCapability < 40 ? 200 : defaultCapability < 60 ? 300 : 400,
+              temperature: defaultCapability < 40 ? 0.05 : defaultCapability < 60 ? 0.1 : 0.15,
+              useFewShot: defaultCapability >= 40,
+              promptComplexity: defaultCapability < 40 ? 'minimal' : defaultCapability < 60 ? 'standard' : 'detailed' as const
+            })),
+            estimatedSwitches: criteria.length - 1,
+            recommendedFirstModel: defaultModel
+          }
+        }
+
         updateExpertStep('planner', { status: 'completed', score: total, maxScore: total })
+
+        // ── Image Extraction ─────────────────────────────────────────────────
+        updateExpertStep('image-extraction', { status: 'running' })
+        addLog(`Извлечение изображений из документа...`, 'info')
+        
+        let fileObj: File | null = null
+        if (fileQueue[fi]?.file) {
+          fileObj = fileQueue[fi].file as File
+        } else {
+          addLog(`Внимание: файл недоступен для извлечения изображений`, 'warning')
+        }
+        
+        if (fileObj) {
+          try {
+            const parseResult = await extractImagesFromDocument(fileObj, (stage, current, total) => {
+              addLog(`${stage}: ${current}/${total}`, 'info')
+            })
+            setExtractedImages(parseResult.images)
+            
+            if (parseResult.images.length > 0) {
+              addLog(`Найдено изображений: ${parseResult.images.length}`, 'success')
+              updateExpertStep('image-extraction', { 
+                status: 'completed', 
+                modelName: `${parseResult.images.length} изображений`,
+                score: parseResult.images.length,
+                maxScore: Math.max(parseResult.images.length, 1)
+              })
+            } else {
+              addLog(`Изображений не найдено`, 'info')
+              updateExpertStep('image-extraction', { status: 'completed', modelName: '0 изображений' })
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            addLog(`Ошибка извлечения изображений: ${msg}`, 'warning')
+            updateExpertStep('image-extraction', { status: 'error' })
+            setExtractedImages([])
+          }
+        } else {
+          addLog(`Пропуск извлечения: файл недоступен`, 'info')
+          updateExpertStep('image-extraction', { status: 'completed', modelName: 'файл недоступен' })
+          setExtractedImages([])
+        }
+
+        // ── Image Analysis (Vision Model) ────────────────────────────────────
+        if (extractedImages.length > 0) {
+          updateExpertStep('image-analysis', { status: 'running' })
+          addLog(`Анализ изображений через vision-модель...`, 'info')
+          
+          try {
+            const analyses = await analyzeImages(extractedImages, apiConfig, (current, total) => {
+              updateExpertStep('image-analysis', { modelName: `${current}/${total} изображений` })
+            })
+            setImageAnalyses(analyses)
+            
+            const highRelevance = analyses.filter(a => a.relevance === 'high').length
+            const mediumRelevance = analyses.filter(a => a.relevance === 'medium').length
+            const lowRelevance = analyses.filter(a => a.relevance === 'low').length
+            
+            addLog(
+              `Анализ завершён: ${highRelevance} высокой релевантности, ` +
+              `${mediumRelevance} средней, ${lowRelevance} низкой`,
+              'success'
+            )
+            
+            updateExpertStep('image-analysis', { 
+              status: 'completed', 
+              modelName: `${highRelevance}/${mediumRelevance}/${lowRelevance}`,
+              score: highRelevance * 3 + mediumRelevance * 2 + lowRelevance,
+              maxScore: analyses.length * 3
+            })
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            addLog(`Ошибка анализа изображений: ${msg}`, 'warning')
+            updateExpertStep('image-analysis', { status: 'error' })
+            setImageAnalyses([])
+          }
+        } else {
+          updateExpertStep('image-analysis', { status: 'completed', modelName: 'нет изображений' })
+          setImageAnalyses([])
+        }
+
+        const imageContext = imageAnalyses.length > 0 
+          ? buildImageContext(imageAnalyses, 1500) 
+          : ''
+        const finalSources = imageContext
+          ? [...sourcesWithRag, { name: '[Vision] Анализ изображений', content: imageContext }]
+          : sourcesWithRag
 
         const criteriaResults: CriterionResult[] = []
         let plagiarismCache: import('../types').PlagiarismReport | null = null
@@ -233,10 +431,31 @@ export default function AnalysisCenter() {
         }
 
         // ── Criteria loop ──────────────────────────────────────────────────
+        let currentLoadedModel: string | null = null
+        
         for (let i = 0; i < total; i++) {
           const criterion = criteria[i]
           const stepId = `expert-${i}`
-          const assignedModel = modelAssignment?.get(criterion.id) ?? firstModel
+          
+          const planStep = executionPlan.steps.find(s => s.criterion === criterion.name)
+          
+          let assignedModel: AiModel | null | undefined
+          
+          if (planStep && aiModels.length > 0) {
+            assignedModel = aiModels.find(m => m.fileName === planStep.recommendedModel)
+            if (!assignedModel) {
+              const targetCapability = planStep.complexity === 'high' ? 70 : 
+                                     planStep.complexity === 'medium' ? 50 : 40
+              assignedModel = findClosestModel(aiModels, targetCapability)
+            }
+          }
+          
+          if (!assignedModel) {
+            assignedModel = modelAssignment?.get(criterion.id)
+          }
+          if (!assignedModel) {
+            assignedModel = firstModel
+          }
 
           if (isOriginalityCriterion(criterion)) {
             updateExpertStep(stepId, { status: 'running' })
@@ -298,28 +517,67 @@ export default function AnalysisCenter() {
           }
 
           if (isElectron && assignedModel) {
-            updateExpertStep(stepId, { status: 'loading', modelName: assignedModel.displayName })
-            addLog(`Загрузка модели: ${assignedModel.displayName}...`, 'info')
-
-            const sw = await window.electronAPI!.switchLlamaModel(assignedModel.path, port)
-            if (!sw.success) {
-              addLog(`Не удалось загрузить модель: ${sw.error}`, 'error')
-              updateExpertStep(stepId, { status: 'error' })
-              const fb = makeFallback(criterion, `Ошибка загрузки модели: ${sw.error}`)
-              criteriaResults.push(fb)
-              setLiveCriteriaResults((prev) => [...prev, fb])
-              setProgress(((fi * total + i + 1) / (filesTotal * total)) * 90)
-              continue
+            const needsSwitch = planStep?.isModelSwitch || currentLoadedModel !== assignedModel.fileName
+            
+            if (needsSwitch) {
+              updateExpertStep(stepId, { status: 'loading', modelName: assignedModel.displayName })
+              addLog(`Переключение на модель: ${assignedModel.displayName}...`, 'info')
+              
+              let loadSuccess = false
+              let lastError = ''
+              
+              for (let attempt = 1; attempt <= 3 && !loadSuccess; attempt++) {
+                if (attempt > 1) {
+                  addLog(`Попытка ${attempt}: повторная загрузка...`, 'warning')
+                  await new Promise<void>((r) => setTimeout(r, 2000))
+                }
+                
+                const sw = await window.electronAPI!.switchLlamaModel(assignedModel.path, port)
+                if (sw.success) {
+                  loadSuccess = true
+                } else {
+                  lastError = sw.error || 'Неизвестная ошибка'
+                  addLog(`Попытка ${attempt} не удалась: ${lastError}`, 'warning')
+                }
+              }
+              
+              if (!loadSuccess) {
+                addLog(`Не удалось загрузить модель после 3 попыток: ${lastError}`, 'error')
+                updateExpertStep(stepId, { status: 'error' })
+                const fb = makeFallback(criterion, `Ошибка загрузки модели: ${lastError}`)
+                criteriaResults.push(fb)
+                setLiveCriteriaResults((prev) => [...prev, fb])
+                setProgress(((fi * total + i + 1) / (filesTotal * total)) * 90)
+                continue
+              }
+              
+              currentLoadedModel = assignedModel.fileName
+              addLog(`Модель загружена, проверка готовности...`, 'success')
+              
+              const ready = await waitForServerReady(baseUrl, 60000)
+              if (!ready) {
+                addLog(`Сервер не ответил в течение 60 секунд`, 'error')
+                updateExpertStep(stepId, { status: 'error' })
+                const fb = makeFallback(criterion, 'Сервер не готов')
+                criteriaResults.push(fb)
+                setLiveCriteriaResults((prev) => [...prev, fb])
+                continue
+              }
+              
+              setConnected(true)
+            } else {
+              addLog(`Используется загруженная модель: ${assignedModel.displayName}`, 'info')
             }
-            addLog(`Модель загружена`, 'success')
-            setConnected(true)
           }
 
           updateExpertStep(stepId, { status: 'running' })
           addLog(`Оценка: ${criterion.name}...`, 'info')
 
           try {
-            const result = await evaluateCriterion(apiConfig, criterion, null, fileContent)
+            const result = await evaluateCriterion(
+              { ...apiConfig, sources: finalSources }, 
+              criterion, null, fileContent
+            )
             criteriaResults.push(result)
             setLiveCriteriaResults((prev) => [...prev, result])
             updateExpertStep(stepId, { status: 'completed', score: result.score, maxScore: criterion.maxScore })
@@ -336,7 +594,7 @@ export default function AnalysisCenter() {
           if (isElectron) {
             addLog(`Выгрузка модели...`, 'info')
             await window.electronAPI!.stopLlamaServer()
-            await new Promise<void>((r) => setTimeout(r, 800))
+            await new Promise<void>((r) => setTimeout(r, 2000))
           }
 
           setProgress(((fi * (total + 2) + i + 1) / (filesTotal * (total + 2))) * 90)
@@ -450,6 +708,19 @@ export default function AnalysisCenter() {
         }
 
         addLog(`${fileName}: ${finalResult.finalScore}/100 (${finalResult.grade} — ${finalResult.gradeDescription})`, 'success')
+
+        // ── Выгрузка модели между файлами ─────────────────────────────────
+        if (isElectron && fi < filesTotal - 1) {
+          addLog('Выгрузка модели для перехода к следующему файлу...', 'info')
+          try {
+            await window.electronAPI!.stopLlamaServer()
+            await new Promise<void>((r) => setTimeout(r, 1500))
+            addLog('Модель выгружена', 'info')
+          } catch (e) {
+            const err = e instanceof Error ? e.message : String(e)
+            addLog(`Предупреждение: ошибка выгрузки — ${err}`, 'warning')
+          }
+        }
       }
 
       setProgress(100)
@@ -529,6 +800,34 @@ export default function AnalysisCenter() {
               <ExpertStepRow key={step.id} step={step} criteriaNames={currentCriteriaNames} variant="planner" />
             ))}
             {(() => {
+              const imgExtStep = expertSteps.find(s => s.id === 'image-extraction')
+              const imgAnalysisStep = expertSteps.find(s => s.id === 'image-analysis')
+              if (!imgExtStep && !imgAnalysisStep) return null
+              if ((imgExtStep?.status === 'completed' || imgExtStep?.status === 'pending') && 
+                  (imgAnalysisStep?.status === 'completed' || imgAnalysisStep?.status === 'pending') &&
+                  extractedImages.length > 0) {
+                return (
+                  <ImageAnalyzerCard 
+                    key="image-analysis"
+                    extractionStep={imgExtStep!}
+                    analysisStep={imgAnalysisStep!}
+                    images={extractedImages}
+                    analyses={imageAnalyses}
+                  />
+                )
+              }
+              return (
+                <div key="image-steps" className="space-y-2">
+                  {imgExtStep && (
+                    <ExpertStepRow key={imgExtStep.id} step={imgExtStep} variant="image" />
+                  )}
+                  {imgAnalysisStep && (
+                    <ExpertStepRow key={imgAnalysisStep.id} step={imgAnalysisStep} variant="image" />
+                  )}
+                </div>
+              )
+            })()}
+            {(() => {
               const cs = expertSteps.filter(s => s.id.startsWith('expert-'))
               return cs.length > 0 ? <CriteriaCard key="criteria" steps={cs} /> : null
             })()}
@@ -574,7 +873,7 @@ function makeFallback(
   }
 }
 
-type StepVariant = 'planner' | 'criterion' | 'plagiarism' | 'summarizer'
+type StepVariant = 'planner' | 'criterion' | 'plagiarism' | 'summarizer' | 'image'
 
 // ── Cycling text ──────────────────────────────────────────────────────────────
 
@@ -878,6 +1177,138 @@ function SummarizerCard({ step, criteriaResults }: { step: ExpertStep; criteriaR
         <div className={`flex justify-between text-[9px] mt-0.5 ${isDone ? 'text-emerald-400' : 'text-indigo-400'}`}>
           <span>{isDone ? 'Готово' : 'Суммирование баллов'}</span>
           <span>{Math.round(progress)}%</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Image Analyzer Card ────────────────────────────────────────────────────────
+
+function ImageAnalyzerCard({ 
+  extractionStep, 
+  analysisStep, 
+  images, 
+  analyses 
+}: { 
+  extractionStep: ExpertStep
+  analysisStep: ExpertStep
+  images: ExtractedImage[]
+  analyses: ImageAnalysis[]
+}) {
+  const [revealed, setRevealed] = useState(0)
+  const isExtractionDone = extractionStep.status === 'completed'
+  const isAnalysisDone = analysisStep.status === 'completed'
+  const isRunning = analysisStep.status === 'running'
+  const isLoading = analysisStep.status === 'loading'
+
+  useEffect(() => {
+    if (isAnalysisDone || !isRunning) return
+    setRevealed(0)
+    const delay = Math.max(300, Math.floor(1500 / Math.max(analyses.length, 1)))
+    const interval = setInterval(() => {
+      setRevealed((n) => (n >= analyses.length ? n : n + 1))
+    }, delay)
+    return () => clearInterval(interval)
+  }, [isRunning, analyses.length])
+
+  useEffect(() => {
+    if (isAnalysisDone) setRevealed(analyses.length)
+  }, [isAnalysisDone, analyses.length])
+
+  const highCount = analyses.filter(a => a.relevance === 'high').length
+  const mediumCount = analyses.filter(a => a.relevance === 'medium').length
+  const lowCount = analyses.filter(a => a.relevance === 'low').length
+  const isDone = isExtractionDone && isAnalysisDone
+
+  const relevanceColor = (r: string) => r === 'high' ? 'text-emerald-500' : r === 'medium' ? 'text-amber-500' : 'text-slate-400'
+  const relevanceBg = (r: string) => r === 'high' ? 'bg-emerald-50 border-emerald-200' : r === 'medium' ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'
+
+  return (
+    <div className={`rounded-xl border-2 overflow-hidden animate-slide-in ${isDone ? 'border-teal-300 bg-teal-50' : 'border-teal-400 bg-teal-50'}`}>
+      <div className="flex items-center gap-2.5 px-3 py-2.5">
+        <i className={`fa-solid fa-image text-sm ${isDone ? 'text-teal-500' : 'text-teal-600'}`} />
+        <p className="text-xs font-bold text-slate-800 flex-1">Анализ изображений</p>
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${isDone ? 'text-teal-600 bg-teal-100' : 'text-teal-600 bg-teal-100'}`}>
+          {isExtractionDone ? `${images.length} изображений` : '...'}
+        </span>
+        {isDone
+          ? <i className="fa-solid fa-circle-check text-teal-500 text-xs ml-1" />
+          : <i className="fa-solid fa-circle-notch fa-spin text-teal-400 text-xs ml-1" />
+        }
+      </div>
+
+      <div className={`border-t px-3 py-3 ${isDone ? 'border-teal-200' : 'border-teal-200'}`}>
+        {images.length === 0 ? (
+          <p className="text-xs text-slate-500 text-center py-2">Изображения не найдены</p>
+        ) : (
+          <div className="space-y-2">
+            {analyses.slice(0, 6).map((analysis, i) => {
+              const image = images.find(img => img.id === analysis.imageId)
+              return (
+                <div 
+                  key={analysis.imageId}
+                  className={`rounded-lg border p-2 transition-all duration-400 ${relevanceBg(analysis.relevance)}`}
+                  style={{ opacity: i < revealed ? 1 : 0.3 }}
+                >
+                  <div className="flex items-start gap-2">
+                    {image && (
+                      <div className="w-10 h-10 rounded overflow-hidden shrink-0 bg-slate-100">
+                        <img 
+                          src={image.dataUrl} 
+                          alt="" 
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className={`text-[9px] font-bold uppercase ${relevanceColor(analysis.relevance)}`}>
+                          {analysis.relevance === 'high' ? 'Высокая' : analysis.relevance === 'medium' ? 'Средняя' : 'Низкая'}
+                        </span>
+                        {analysis.hasText && (
+                          <span className="text-[8px] bg-blue-100 text-blue-600 px-1 rounded">текст</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-600 leading-tight line-clamp-2">
+                        {analysis.description || 'Описание недоступно'}
+                      </p>
+                      {analysis.issues && analysis.issues.length > 0 && (
+                        <p className="text-[9px] text-red-500 mt-0.5">⚠ {analysis.issues[0]}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {analyses.length > 6 && (
+              <p className="text-[10px] text-slate-400 text-center">+{analyses.length - 6} изображений...</p>
+            )}
+          </div>
+        )}
+
+        {!isDone && (isRunning || isLoading) && (
+          <div className="mt-3 flex items-center gap-2 text-[10px] text-teal-600">
+            <i className="fa-solid fa-circle-notch fa-spin text-xs" />
+            <span>Анализ через vision-модель...</span>
+          </div>
+        )}
+      </div>
+
+      <div className="px-3 pb-3">
+        <div className="flex gap-3 text-[9px]">
+          <div className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="text-slate-500">Высокая: {highCount}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-amber-400" />
+            <span className="text-slate-500">Средняя: {mediumCount}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-slate-300" />
+            <span className="text-slate-500">Низкая: {lowCount}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -1304,7 +1735,7 @@ function ExpertStepRow({
 
   const s = statusConfig[step.status]
   const isSpecial = variant !== 'criterion'
-  const specialIcons: Record<StepVariant, string> = { planner: 'fa-map', criterion: '', plagiarism: 'fa-shield-halved', summarizer: 'fa-sigma' }
+  const specialIcons: Record<StepVariant, string> = { planner: 'fa-map', criterion: '', plagiarism: 'fa-shield-halved', summarizer: 'fa-sigma', image: 'fa-image' }
   const iconClass = isSpecial ? specialIcons[variant] : s.icon
 
   const progressPct = step.status === 'completed' && step.score !== undefined && step.maxScore

@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Grader AI - Автоматизированная проверка работ</title>
+    
+    <!-- Fonts -->
+    <link href="https://cdn.jsdelivr.net/npm/@fontsource/inter@4.5.15/index.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@4.5.12/index.css" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        primary: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            200: '#bfdbfe',
+                            300: '#93c5fd',
+                            400: '#60a5fa',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            800: '#1e40af',
+                            900: '#1e3a8a',
+                        },
+                        secondary: {
+                            50: '#eef2ff',
+                            600: '#4f46e5',
+                        }
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'slide-in': 'slideIn 0.3s ease-out forwards',
+                        'fade-in': 'fadeIn 0.4s ease-out forwards',
+                    },
+                    keyframes: {
+                        slideIn: {
+                            '0%': { transform: 'translateY(10px)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' },
+                        },
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+
+    <style>
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+
+        /* Glassmorphism Utilities */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        
+        .glass-card {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            transition: all 0.3s ease;
+        }
+        .glass-card:hover {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border-color: #93c5fd;
+            transform: translateY(-2px);
+        }
+
+        /* Drag & Drop Zone */
+        .drop-zone {
+            transition: all 0.2s ease;
+            border: 2px dashed #cbd5e1;
+        }
+        .drop-zone.dragover {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+            transform: scale(1.01);
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top: 3px solid #3b82f6;
+            width: 20px;
+            height: 20px;
+            -webkit-animation: spin 1s linear infinite; /* Safari */
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Planner Tile Animation */
+        .planner-tile {
+            transition: all 0.3s ease;
+        }
+        .planner-tile.active {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+        }
+        .planner-tile.completed {
+            border-color: #10b981;
+            background-color: #f0fdf4;
+        }
+
+        /* Toast Notification */
+        .toast {
+            transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+        }
+        .toast-hidden {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+
+        /* Log Console Styles (Light Theme) */
+        .log-entry {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            padding: 4px 0;
+            border-bottom: 1px solid #f1f5f9;
+            animation: fadeIn 0.2s ease-out;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        .log-time {
+            color: #94a3b8;
+            font-size: 0.75rem;
+            margin-right: 8px;
+            display: inline-block;
+            width: 60px;
+        }
+        .log-info { color: #2563eb; }
+        .log-success { color: #059669; }
+        .log-error { color: #dc2626; }
+        .log-warning { color: #d97706; }
+        .log-icon { margin-right: 6px; width: 14px; text-align: center; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans min-h-screen flex flex-col overflow-hidden">
+
+    <!-- Navbar -->
+    <header class="glass-panel sticky top-0 z-40 border-b border-slate-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <!-- Logo -->
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-500/30">
+                        <i class="fa-solid fa-graduation-cap text-xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-indigo-600">Smart Grader AI</h1>
+                        <p class="text-xs text-slate-500 font-medium">Local AI Assessment System</p>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="flex items-center gap-4">
+                    <!-- LM Studio Connection -->
+                    <button id="lmStudioBtn" onclick="app.toggleLMStudio()" class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200">
+                        <div id="lmStatusDot" class="w-2.5 h-2.5 rounded-full bg-slate-400"></div>
+                        <span id="lmStatusText">Отключено</span>
+                    </button>
+
+                    <!-- Settings -->
+                    <button onclick="app.openModal('settingsModal')" class="w-10 h-10 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-blue-600 transition-colors">
+                        <i class="fa-solid fa-gear text-lg"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-gradient-to-b from-slate-50 to-blue-50/30">
+        <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- Left Column (Configuration) -->
+            <div class="lg:col-span-3 space-y-6">
+                
+                <!-- 1. File Upload -->
+                <div class="glass-card rounded-2xl p-5 bg-white">
+                    <h2 class="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-cloud-arrow-up text-blue-500"></i> Загрузка работы
+                    </h2>
+                    
+                    <div id="dropZone" class="drop-zone rounded-xl p-6 text-center cursor-pointer bg-slate-50 hover:bg-blue-50/50 group relative overflow-hidden">
+                        <input type="file" id="fileInput" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".pdf,.docx,.txt,.md,.py,.js,.java,.cpp,.c,.html,.css">
+                        <div class="relative z-10 transition-transform group-hover:scale-105 duration-200">
+                            <div class="w-12 h-12 mx-auto mb-3 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
+                                <i class="fa-solid fa-file-arrow-up text-xl"></i>
+                            </div>
+                            <p class="text-sm font-medium text-slate-700">Перетащите файл или нажмите</p>
+                            <p class="text-xs text-slate-500 mt-1">PDF, DOCX, TXT, MD, Code</p>
+                        </div>
+                    </div>
+
+                    <!-- File Preview -->
+                    <div id="filePreview" class="hidden mt-4 p-3 bg-blue-50 rounded-lg border border-blue-100 flex items-center justify-between">
+                        <div class="flex items-center gap-3 overflow-hidden">
+                            <div class="w-8 h-8 bg-white rounded flex items-center justify-center text-blue-600 shadow-sm shrink-0">
+                                <i id="fileIcon" class="fa-solid fa-file-lines"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <p id="fileName" class="text-sm font-medium text-slate-800 truncate">document.pdf</p>
+                                <p id="fileSize" class="text-xs text-slate-500">1.2 MB</p>
+                            </div>
+                        </div>
+                        <button onclick="app.clearFile()" class="text-slate-400 hover:text-red-500 transition-colors">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. AI Model Selection -->
+                <div class="glass-card rounded-2xl p-5 bg-white">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-brain text-indigo-500"></i> Модель ИИ
+                        </h2>
+                        <button onclick="app.refreshModels()" class="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1">
+                            <i class="fa-solid fa-rotate"></i> Обновить
+                        </button>
+                    </div>
+                    
+                    <div id="modelList" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        <!-- Models will be injected here -->
+                        <div class="text-center py-4 text-slate-400 text-sm">
+                            <i class="fa-solid fa-circle-notch fa-spin mb-2"></i>
+                            <p>Загрузка моделей...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Rubric -->
+                <div class="glass-card rounded-2xl p-5 bg-white">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-list-check text-emerald-500"></i> Рубрика
+                        </h2>
+                        <button onclick="app.openModal('rubricModal')" class="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1">
+                            <i class="fa-solid fa-plus"></i> Создать
+                        </button>
+                    </div>
+
+                    <select id="rubricSelect" onchange="app.selectRubric(this.value)" class="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all mb-3">
+                        <!-- Options injected via JS -->
+                    </select>
+
+                    <div id="rubricPreview" class="space-y-3">
+                        <!-- Criteria preview injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center Column (Action & Progress) -->
+            <div class="lg:col-span-6 space-y-6">
+                
+                <!-- Main Action Button -->
+                <div class="glass-card rounded-2xl p-8 bg-white text-center relative overflow-hidden group">
+                    <div class="absolute inset-0 bg-gradient-to-r from-blue-50 to-indigo-50 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                    
+                    <button id="startBtn" onclick="app.startAnalysis()" disabled class="relative z-10 w-full py-4 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-blue-500/30 transform transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-3">
+                        <i class="fa-solid fa-play"></i>
+                        <span>Начать проверку</span>
+                    </button>
+                    <p class="mt-3 text-xs text-slate-500">
+                        Анализ выполняется локально через LM Studio API
+                    </p>
+                </div>
+
+                <!-- Planner Window (Hidden by default) -->
+                <div id="plannerWindow" class="hidden glass-card rounded-2xl p-6 bg-white border-blue-100 shadow-xl shadow-blue-100/50">
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-chess-board text-blue-500"></i>
+                            Планировщик распределяет задачи
+                        </h3>
+                        <span class="px-2 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-md animate-pulse">В ПРОЦЕССЕ</span>
+                    </div>
+                    
+                    <div id="plannerGrid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <!-- Planner tiles injected here -->
+                    </div>
+                </div>
+
+                <!-- Progress Panel -->
+                <div id="progressPanel" class="hidden glass-card rounded-2xl p-6 bg-white">
+                    <div class="flex justify-between items-end mb-2">
+                        <h3 class="font-semibold text-slate-700">Прогресс проверки</h3>
+                        <span id="progressPercent" class="text-2xl font-bold text-blue-600">0%</span>
+                    </div>
+                    
+                    <div class="w-full bg-slate-100 rounded-full h-3 mb-6 overflow-hidden">
+                        <div id="progressBar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-3 rounded-full transition-all duration-500 ease-out w-0"></div>
+                    </div>
+
+                    <div class="space-y-3">
+                        <h4 class="text-sm font-medium text-slate-500 uppercase tracking-wider">Этапы</h4>
+                        <div id="expertSteps" class="space-y-2">
+                            <!-- Steps injected here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Log Console (Light Theme) -->
+                <div class="glass-card rounded-2xl bg-white border-slate-200 p-4 h-64 overflow-hidden flex flex-col shadow-sm">
+                    <div class="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                        <span class="text-xs font-bold text-slate-500 uppercase tracking-wide"><i class="fa-solid fa-terminal mr-2 text-slate-400"></i>Журнал выполнения</span>
+                        <button onclick="document.getElementById('logContent').innerHTML = '<div class=\'text-slate-400 italic text-sm\'>Журнал очищен</div>'" class="text-xs text-slate-400 hover:text-red-500 transition-colors font-medium">Очистить</button>
+                    </div>
+                    <div id="logContent" class="flex-1 overflow-y-auto pr-2 space-y-1">
+                        <div class="log-entry text-slate-400 italic">Система готова к работе...</div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Right Column (Stats & History) -->
+            <div class="lg:col-span-3 space-y-6">
+                
+                <!-- Statistics -->
+                <div class="glass-card rounded-2xl p-5 bg-white">
+                    <h2 class="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-pie text-orange-500"></i> Статистика
+                    </h2>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
+                            <p class="text-2xl font-bold text-slate-800" id="statCount">0</p>
+                            <p class="text-xs text-slate-500 mt-1">Проверено</p>
+                        </div>
+                        <div class="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
+                            <p class="text-2xl font-bold text-slate-800" id="statAvg">-</p>
+                            <p class="text-xs text-slate-500 mt-1">Средний балл</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- History -->
+                <div class="glass-card rounded-2xl p-5 bg-white flex-1">
+                    <h2 class="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-clock-rotate-left text-slate-500"></i> История
+                    </h2>
+                    
+                    <div id="historyList" class="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                        <div class="text-center py-8 text-slate-400 text-sm">
+                            <i class="fa-regular fa-folder-open text-2xl mb-2 opacity-50"></i>
+                            <p>История пуста</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2"></div>
+
+    <!-- MODALS -->
+
+    <!-- Results Modal -->
+    <div id="resultsModal" class="fixed inset-0 z-50 hidden">
+        <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onclick="app.closeModal('resultsModal')"></div>
+        <div class="absolute inset-0 flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl animate-slide-in flex flex-col">
+                <div class="p-6 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
+                    <h2 class="text-2xl font-bold text-slate-800">Результаты проверки</h2>
+                    <button onclick="app.closeModal('resultsModal')" class="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-500 transition-colors">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+                
+                <div class="p-6 space-y-8">
+                    <!-- Header Stats -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="md:col-span-1 flex flex-col items-center justify-center p-4 bg-blue-50 rounded-xl border border-blue-100">
+                            <span class="text-sm text-slate-500 font-medium mb-1">Итоговая оценка</span>
+                            <div class="text-5xl font-extrabold text-blue-600 mb-2" id="resFinalScore">0</div>
+                            <span class="text-sm font-bold text-slate-700 bg-white px-3 py-1 rounded-full shadow-sm" id="resGrade">F</span>
+                        </div>
+                        <div class="md:col-span-2 relative h-48 w-full">
+                            <canvas id="resultsChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Criteria Breakdown -->
+                    <div>
+                        <h3 class="text-lg font-bold text-slate-800 mb-4">Детальный разбор</h3>
+                        <div id="resCriteriaList" class="space-y-4">
+                            <!-- Injected via JS -->
+                        </div>
+                    </div>
+
+                    <!-- Feedback -->
+                    <div>
+                        <h3 class="text-lg font-bold text-slate-800 mb-2">Общий Feedback</h3>
+                        <div class="prose prose-sm max-w-none bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-700" id="resFeedback">
+                            <!-- Markdown content -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 sticky bottom-0">
+                    <button onclick="app.downloadReport()" class="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium transition-colors">
+                        <i class="fa-solid fa-download mr-2"></i>Скачать MD
+                    </button>
+                    <button onclick="app.saveToHistory()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-lg shadow-blue-500/30 transition-colors">
+                        Сохранить в историю
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="fixed inset-0 z-50 hidden">
+        <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="app.closeModal('settingsModal')"></div>
+        <div class="absolute inset-0 flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl w-full max-w-md shadow-2xl animate-slide-in">
+                <div class="p-6 border-b border-slate-100 flex justify-between items-center">
+                    <h2 class="text-xl font-bold text-slate-800">Настройки</h2>
+                    <button onclick="app.closeModal('settingsModal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">LM Studio API URL</label>
+                        <input type="text" id="settingUrl" value="http://localhost:1234/v1" class="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Температура (<span id="tempValue">0.7</span>)</label>
+                        <input type="range" id="settingTemp" min="0" max="1" step="0.1" value="0.7" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Max Tokens</label>
+                        <select id="settingTokens" class="w-full p-2 border border-slate-300 rounded-lg bg-white">
+                            <option value="2048">2048</option>
+                            <option value="4096" selected>4096</option>
+                            <option value="8192">8192</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="p-6 border-t border-slate-100 flex justify-end gap-3">
+                    <button onclick="app.closeModal('settingsModal')" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Отмена</button>
+                    <button onclick="app.saveSettings()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Сохранить</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rubric Builder Modal -->
+    <div id="rubricModal" class="fixed inset-0 z-50 hidden">
+        <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="app.closeModal('rubricModal')"></div>
+        <div class="absolute inset-0 flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-slide-in flex flex-col">
+                <div class="p-6 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
+                    <h2 class="text-xl font-bold text-slate-800">Конструктор рубрики</h2>
+                    <button onclick="app.closeModal('rubricModal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                
+                <div class="p-6 space-y-4 flex-1">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Название рубрики</label>
+                        <input type="text" id="newRubricName" class="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Например: Курсовая работа по ИИ">
+                    </div>
+
+                    <div class="border-t border-slate-200 pt-4">
+                        <h3 class="font-medium text-slate-800 mb-3">Критерии</h3>
+                        <div id="criteriaBuilder" class="space-y-3">
+                            <!-- Dynamic criteria inputs -->
+                        </div>
+                        <button onclick="app.addCriterionRow()" class="mt-3 text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1">
+                            <i class="fa-solid fa-plus"></i> Добавить критерий
+                        </button>
+                    </div>
+                    
+                    <div class="flex justify-between items-center bg-slate-50 p-3 rounded-lg">
+                        <span class="text-sm font-medium text-slate-600">Сумма весов:</span>
+                        <span id="totalWeight" class="font-bold text-slate-800">0%</span>
+                    </div>
+                </div>
+
+                <div class="p-6 border-t border-slate-100 flex justify-end gap-3 sticky bottom-0 bg-white">
+                    <button onclick="app.closeModal('rubricModal')" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Отмена</button>
+                    <button onclick="app.saveNewRubric()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Сохранить рубрику</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Application Logic ---
+
+        class SmartGrader {
+            constructor() {
+                // State
+                this.config = {
+                    url: localStorage.getItem('sg_url') || 'http://localhost:1234/v1',
+                    temp: parseFloat(localStorage.getItem('sg_temp')) || 0.7,
+                    maxTokens: parseInt(localStorage.getItem('sg_tokens')) || 4096
+                };
+                
+                this.state = {
+                    connected: false,
+                    models: [],
+                    selectedModel: null,
+                    currentFile: null,
+                    fileContent: '',
+                    rubrics: JSON.parse(localStorage.getItem('sg_rubrics')) || this.getDefaultRubrics(),
+                    selectedRubricId: null,
+                    history: JSON.parse(localStorage.getItem('sg_history')) || [],
+                    isAnalyzing: false,
+                    currentResult: null
+                };
+
+                // UI Elements Cache
+                this.ui = {
+                    lmBtn: document.getElementById('lmStudioBtn'),
+                    lmStatusDot: document.getElementById('lmStatusDot'),
+                    lmStatusText: document.getElementById('lmStatusText'),
+                    dropZone: document.getElementById('dropZone'),
+                    fileInput: document.getElementById('fileInput'),
+                    filePreview: document.getElementById('filePreview'),
+                    fileName: document.getElementById('fileName'),
+                    fileSize: document.getElementById('fileSize'),
+                    fileIcon: document.getElementById('fileIcon'),
+                    modelList: document.getElementById('modelList'),
+                    rubricSelect: document.getElementById('rubricSelect'),
+                    rubricPreview: document.getElementById('rubricPreview'),
+                    startBtn: document.getElementById('startBtn'),
+                    plannerWindow: document.getElementById('plannerWindow'),
+                    plannerGrid: document.getElementById('plannerGrid'),
+                    progressPanel: document.getElementById('progressPanel'),
+                    progressBar: document.getElementById('progressBar'),
+                    progressPercent: document.getElementById('progressPercent'),
+                    expertSteps: document.getElementById('expertSteps'),
+                    logContent: document.getElementById('logContent'),
+                    statCount: document.getElementById('statCount'),
+                    statAvg: document.getElementById('statAvg'),
+                    historyList: document.getElementById('historyList')
+                };
+
+                this.init();
+            }
+
+            init() {
+                this.setupEventListeners();
+                this.renderRubricSelect();
+                this.renderHistory();
+                this.updateStats();
+                this.checkConnection(); // Initial check
+                
+                // Load default rubric if none selected
+                if (!this.state.selectedRubricId && this.state.rubrics.length > 0) {
+                    this.state.selectedRubricId = this.state.rubrics[0].id;
+                    this.renderRubricPreview();
+                }
+            }
+
+            setupEventListeners() {
+                // Drag & Drop
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    this.ui.dropZone.addEventListener(eventName, (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    });
+                });
+
+                this.ui.dropZone.addEventListener('dragover', () => this.ui.dropZone.classList.add('dragover'));
+                this.ui.dropZone.addEventListener('dragleave', () => this.ui.dropZone.classList.remove('dragover'));
+                this.ui.dropZone.addEventListener('drop', (e) => {
+                    this.ui.dropZone.classList.remove('dragover');
+                    const files = e.dataTransfer.files;
+                    if (files.length) this.handleFile(files[0]);
+                });
+
+                this.ui.fileInput.addEventListener('change', (e) => {
+                    if (e.target.files.length) this.handleFile(e.target.files[0]);
+                });
+
+                // Settings Slider
+                document.getElementById('settingTemp').addEventListener('input', (e) => {
+                    document.getElementById('tempValue').textContent = e.target.value;
+                });
+            }
+
+            // --- Core Logic ---
+
+            async checkConnection() {
+                try {
+                    const response = await fetch(`${this.config.url}/models`, { method: 'GET' });
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.state.connected = true;
+                        this.state.models = data.data || [];
+                        this.updateLMStatus('connected', `${this.state.models.length} моделей`);
+                        this.renderModels();
+                        this.log('Подключение к LM Studio успешно', 'success');
+                    } else {
+                        throw new Error('API error');
+                    }
+                } catch (error) {
+                    this.state.connected = false;
+                    this.updateLMStatus('disconnected', 'Отключено');
+                    this.log('LM Studio не найден. Используем демо-режим.', 'warning');
+                    // Mock models for demo
+                    this.state.models = [
+                        { id: 'mistral-7b-instruct', name: 'Mistral 7B Instruct (Mock)' },
+                        { id: 'llama-3-8b', name: 'Llama 3 8B (Mock)' }
+                    ];
+                    this.renderModels();
+                }
+            }
+
+            toggleLMStudio() {
+                if (this.state.connected) {
+                    this.state.connected = false;
+                    this.updateLMStatus('disconnected', 'Отключено');
+                    this.log('Соединение разорвано', 'info');
+                } else {
+                    this.updateLMStatus('connecting', 'Подключение...');
+                    this.checkConnection();
+                }
+            }
+
+            updateLMStatus(status, text) {
+                const dot = this.ui.lmStatusDot;
+                dot.className = 'w-2.5 h-2.5 rounded-full';
+                
+                if (status === 'connected') {
+                    dot.classList.add('bg-green-500', 'shadow-[0_0_8px_rgba(34,197,94,0.6)]');
+                    this.ui.lmBtn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 bg-green-50 text-green-700 border border-green-200';
+                } else if (status === 'connecting') {
+                    dot.classList.add('bg-yellow-500', 'animate-pulse');
+                    this.ui.lmBtn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 bg-yellow-50 text-yellow-700 border border-yellow-200';
+                } else {
+                    dot.classList.add('bg-slate-400');
+                    this.ui.lmBtn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200';
+                }
+                
+                this.ui.lmStatusText.textContent = text;
+            }
+
+            async handleFile(file) {
+                this.ui.filePreview.classList.remove('hidden');
+                this.ui.fileName.textContent = file.name;
+                this.ui.fileSize.textContent = (file.size / 1024).toFixed(1) + ' KB';
+                
+                // Icon logic
+                const ext = file.name.split('.').pop().toLowerCase();
+                const icons = { pdf: 'fa-file-pdf text-red-500', docx: 'fa-file-word text-blue-600', txt: 'fa-file-lines text-slate-500', md: 'fa-file-code text-slate-700' };
+                const defaultIcon = 'fa-file';
+                const iconClass = icons[ext] || defaultIcon;
+                this.ui.fileIcon.className = `fa-solid ${iconClass.split(' ')[0]} ${iconClass.split(' ')[1] || ''}`;
+
+                this.state.currentFile = file;
+                this.log(`Файл загружен: ${file.name}`, 'info');
+                
+                // Extract text (Mock for demo if libraries fail or for speed)
+                try {
+                    if (ext === 'pdf') {
+                        const arrayBuffer = await file.arrayBuffer();
+                        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                        let text = '';
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            text += (await page.getTextContent()).items.map(item => item.str).join(' ');
+                        }
+                        this.state.fileContent = text.substring(0, 15000);
+                    } else if (ext === 'docx') {
+                        const arrayBuffer = await file.arrayBuffer();
+                        const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+                        this.state.fileContent = result.value.substring(0, 15000);
+                    } else {
+                        const text = await file.text();
+                        this.state.fileContent = text.substring(0, 15000);
+                    }
+                    
+                    if (this.state.fileContent.length >= 15000) {
+                        this.log('Текст обрезан до 15000 символов', 'warning');
+                    }
+                    this.log(`Извлечено ${this.state.fileContent.length} символов`, 'success');
+                } catch (e) {
+                    this.log('Ошибка чтения файла. Используем заглушку.', 'error');
+                    this.state.fileContent = "Это пример текста студенческой работы для демонстрации работы системы Smart Grader AI. Работа посвящена анализу современных методов машинного обучения...";
+                }
+            }
+
+            clearFile() {
+                this.state.currentFile = null;
+                this.state.fileContent = '';
+                this.ui.fileInput.value = '';
+                this.ui.filePreview.classList.add('hidden');
+                this.log('Файл очищен', 'info');
+            }
+
+            refreshModels() {
+                this.checkConnection();
+            }
+
+            renderModels() {
+                this.ui.modelList.innerHTML = '';
+                if (!this.state.models.length) {
+                    this.ui.modelList.innerHTML = '<div class="text-center py-4 text-slate-400 text-sm">Нет доступных моделей</div>';
+                    return;
+                }
+
+                this.state.models.forEach(model => {
+                    const div = document.createElement('div');
+                    div.className = `p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${this.state.selectedModel === model.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-slate-200 hover:border-blue-300'}`;
+                    div.onclick = () => {
+                        this.state.selectedModel = model.id;
+                        this.renderModels();
+                        this.log(`Выбрана модель: ${model.name}`, 'info');
+                    };
+                    div.innerHTML = `
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold">AI</div>
+                            <span class="text-sm font-medium text-slate-700 truncate max-w-[180px]">${model.name}</span>
+                        </div>
+                        ${this.state.selectedModel === model.id ? '<i class="fa-solid fa-circle-check text-blue-600"></i>' : ''}
+                    `;
+                    this.ui.modelList.appendChild(div);
+                });
+            }
+
+            // --- Rubrics ---
+
+            getDefaultRubrics() {
+                return [{
+                    id: 'default-1',
+                    name: 'Стандартная академическая',
+                    criteria: [
+                        { id: 'c1', name: 'Соответствие теме', weight: 20, max: 10 },
+                        { id: 'c2', name: 'Оригинальность', weight: 20, max: 10 },
+                        { id: 'c3', name: 'Структура работы', weight: 20, max: 10 },
+                        { id: 'c4', name: 'Качество содержания', weight: 20, max: 10 },
+                        { id: 'c5', name: 'Оформление и стиль', weight: 20, max: 10 }
+                    ]
+                }];
+            }
+
+            renderRubricSelect() {
+                this.ui.rubricSelect.innerHTML = '';
+                this.state.rubrics.forEach(r => {
+                    const opt = document.createElement('option');
+                    opt.value = r.id;
+                    opt.textContent = r.name;
+                    if (r.id === this.state.selectedRubricId) opt.selected = true;
+                    this.ui.rubricSelect.appendChild(opt);
+                });
+            }
+
+            selectRubric(id) {
+                this.state.selectedRubricId = id;
+                this.renderRubricPreview();
+            }
+
+            renderRubricPreview() {
+                const rubric = this.state.rubrics.find(r => r.id === this.state.selectedRubricId);
+                if (!rubric) return;
+
+                this.ui.rubricPreview.innerHTML = rubric.criteria.map(c => `
+                    <div class="flex justify-between items-center text-sm p-2 bg-slate-50 rounded border border-slate-100">
+                        <span class="text-slate-700 font-medium">${c.name}</span>
+                        <span class="text-xs font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">${c.weight}%</span>
+                    </div>
+                `).join('');
+            }
+
+            // --- Analysis Process ---
+
+            async startAnalysis() {
+                if (!this.state.fileContent) {
+                    this.showToast('Сначала загрузите файл', 'error');
+                    return;
+                }
+                if (!this.state.selectedModel) {
+                    this.showToast('Выберите модель ИИ', 'error');
+                    return;
+                }
+                if (!this.state.selectedRubricId) {
+                    this.showToast('Выберите рубрику', 'error');
+                    return;
+                }
+
+                this.state.isAnalyzing = true;
+                this.ui.startBtn.disabled = true;
+                this.ui.progressPanel.classList.remove('hidden');
+                this.log('Запуск процесса анализа...', 'info');
+
+                // 1. Planner Phase
+                await this.runPlanner();
+
+                // 2. Execution Phase
+                await this.runExperts();
+
+                // 3. Finish
+                this.state.isAnalyzing = false;
+                this.ui.startBtn.disabled = false;
+                this.showToast('Проверка завершена!', 'success');
+                this.showResultsModal();
+            }
+
+            async runPlanner() {
+                this.ui.plannerWindow.classList.remove('hidden');
+                this.ui.plannerWindow.scrollIntoView({ behavior: 'smooth' });
+                
+                const rubric = this.state.rubrics.find(r => r.id === this.state.selectedRubricId);
+                const grid = this.ui.plannerGrid;
+                grid.innerHTML = '';
+
+                // Create tiles
+                const tiles = rubric.criteria.map(c => ({
+                    id: c.id,
+                    name: c.name,
+                    weight: c.weight,
+                    status: 'pending', // pending, analyzing, done
+                    model: null
+                }));
+
+                tiles.forEach(t => {
+                    const div = document.createElement('div');
+                    div.id = `tile-${t.id}`;
+                    div.className = 'planner-tile p-4 rounded-xl border border-slate-200 bg-white shadow-sm flex flex-col gap-2';
+                    div.innerHTML = `
+                        <div class="flex justify-between items-start">
+                            <h4 class="font-semibold text-slate-700 text-sm">${t.name}</h4>
+                            <span class="text-xs font-bold text-slate-400">${t.weight}%</span>
+                        </div>
+                        <div class="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+                            <div class="h-full bg-blue-500 w-0 transition-all duration-500" id="bar-${t.id}"></div>
+                        </div>
+                        <div class="text-xs text-slate-500 font-mono h-8 flex items-center" id="status-${t.id}">Ожидание...</div>
+                    `;
+                    grid.appendChild(div);
+                });
+
+                // Simulate planning logic
+                for (let i = 0; i < tiles.length; i++) {
+                    const tile = tiles[i];
+                    const el = document.getElementById(`tile-${tile.id}`);
+                    const statusEl = document.getElementById(`status-${tile.id}`);
+                    const barEl = document.getElementById(`bar-${tile.id}`);
+
+                    // Activate
+                    el.classList.add('active');
+                    statusEl.textContent = 'Анализ требований...';
+                    statusEl.classList.add('text-blue-600');
+                    barEl.style.width = '30%';
+
+                    await new Promise(r => setTimeout(r, 800)); // Simulate processing
+
+                    // Assign Model (Mock logic)
+                    const assignedModel = this.state.models[Math.floor(Math.random() * this.state.models.length)].name;
+                    tile.model = assignedModel;
+                    
+                    statusEl.innerHTML = `<span class="text-indigo-600"><i class="fa-solid fa-microchip"></i> ${assignedModel}</span>`;
+                    barEl.style.width = '70%';
+
+                    await new Promise(r => setTimeout(r, 600));
+
+                    // Done
+                    el.classList.remove('active');
+                    el.classList.add('completed');
+                    statusEl.textContent = 'Готово';
+                    statusEl.classList.remove('text-blue-600');
+                    statusEl.classList.add('text-green-600');
+                    barEl.style.width = '100%';
+                    barEl.classList.remove('bg-blue-500');
+                    barEl.classList.add('bg-green-500');
+                }
+
+                await new Promise(r => setTimeout(r, 1500));
+                this.ui.plannerWindow.classList.add('hidden');
+                this.log('План оценки сформирован', 'success');
+            }
+
+            async runExperts() {
+                const rubric = this.state.rubrics.find(r => r.id === this.state.selectedRubricId);
+                this.state.expertResults = [];
+                
+                // Reset progress UI
+                this.ui.expertSteps.innerHTML = '';
+                let totalSteps = rubric.criteria.length;
+                let currentStep = 0;
+
+                // Create Steps UI
+                rubric.criteria.forEach((c, idx) => {
+                    const div = document.createElement('div');
+                    div.id = `step-${idx}`;
+                    div.className = 'flex items-center gap-3 p-3 bg-slate-50 rounded-lg border border-slate-100 opacity-50 transition-all';
+                    div.innerHTML = `
+                        <div class="w-6 h-6 rounded-full border-2 border-slate-300 flex items-center justify-center text-xs font-bold text-slate-400">${idx + 1}</div>
+                        <div class="flex-1">
+                            <div class="flex justify-between mb-1">
+                                <span class="text-sm font-medium text-slate-700">${c.name}</span>
+                                <span class="text-xs text-slate-500 status-text">Ожидание</span>
+                            </div>
+                            <div class="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                                <div class="h-full bg-blue-500 w-0 transition-all duration-300"></div>
+                            </div>
+                        </div>
+                    `;
+                    this.ui.expertSteps.appendChild(div);
+                });
+
+                // Process each criterion
+                for (let i = 0; i < rubric.criteria.length; i++) {
+                    const criterion = rubric.criteria[i];
+                    const stepEl = document.getElementById(`step-${i}`);
+                    const statusText = stepEl.querySelector('.status-text');
+                    const bar = stepEl.querySelector('.bg-blue-500');
+
+                    // Activate step
+                    stepEl.classList.remove('opacity-50');
+                    stepEl.classList.add('bg-blue-50', 'border-blue-200');
+                    statusText.textContent = 'Анализирует...';
+                    statusText.classList.add('text-blue-600');
+                    bar.style.width = '50%';
+
+                    // Call LLM (Mock)
+                    const result = await this.mockLLMCall(criterion);
+                    
+                    // Update UI
+                    this.state.expertResults.push(result);
+                    bar.style.width = '100%';
+                    bar.classList.remove('bg-blue-500');
+                    bar.classList.add('bg-green-500');
+                    statusText.textContent = `${result.score}/${criterion.max} баллов`;
+                    statusText.classList.remove('text-blue-600');
+                    statusText.classList.add('text-green-600', 'font-bold');
+                    
+                    // Update global progress
+                    currentStep++;
+                    const percent = Math.round((currentStep / totalSteps) * 100);
+                    this.ui.progressBar.style.width = `${percent}%`;
+                    this.ui.progressPercent.textContent = `${percent}%`;
+
+                    this.log(`Критерий "${criterion.name}" оценен: ${result.score}/${criterion.max}`, 'info');
+                    await new Promise(r => setTimeout(r, 800)); // Delay between steps
+                }
+            }
+
+            async mockLLMCall(criterion) {
+                // Simulate network delay
+                await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+                
+                // Mock logic: Random score based on criterion max
+                const score = Math.floor(Math.random() * (criterion.max + 1));
+                
+                return {
+                    criterionId: criterion.id,
+                    criterionName: criterion.name,
+                    maxScore: criterion.max,
+                    score: score,
+                    justification: `Анализ показал ${score > criterion.max/2 ? 'хорошее' : 'недостаточное'} соответствие критерию "${criterion.name}". ${score === criterion.max ? 'Работа выполнена идеально.' : 'Требуется доработка в отдельных аспектах.'}`,
+                    strengths: score > 5 ? ['Глубокий анализ', 'Четкая структура'] : [],
+                    weaknesses: score < 8 ? ['Недостаточно примеров', 'Стилистические ошибки'] : []
+                };
+            }
+
+            // --- Results & UI ---
+
+            showResultsModal() {
+                const rubric = this.state.rubrics.find(r => r.id === this.state.selectedRubricId);
+                const results = this.state.expertResults;
+                
+                // Calculate Total
+                let totalScore = 0;
+                let maxTotal = 0;
+                results.forEach(r => {
+                    totalScore += r.score;
+                    maxTotal += r.maxScore;
+                });
+                
+                const percentage = Math.round((totalScore / maxTotal) * 100);
+                let grade = 'F';
+                if (percentage >= 90) grade = 'A';
+                else if (percentage >= 80) grade = 'B';
+                else if (percentage >= 70) grade = 'C';
+                else if (percentage >= 60) grade = 'D';
+                else if (percentage >= 50) grade = 'E';
+
+                this.state.currentResult = {
+                    date: new Date().toISOString(),
+                    fileName: this.state.currentFile.name,
+                    score: percentage,
+                    grade: grade,
+                    details: results
+                };
+
+                // Populate Modal
+                document.getElementById('resFinalScore').textContent = percentage;
+                document.getElementById('resGrade').textContent = grade;
+                
+                // Chart
+                const ctx = document.getElementById('resultsChart').getContext('2d');
+                if (window.myChart) window.myChart.destroy();
+                
+                window.myChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Получено', 'Остаток'],
+                        datasets: [{
+                            data: [totalScore, maxTotal - totalScore],
+                            backgroundColor: ['#2563eb', '#e2e8f0'],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '70%',
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { enabled: false }
+                        }
+                    }
+                });
+
+                // Criteria List
+                const list = document.getElementById('resCriteriaList');
+                list.innerHTML = results.map(r => {
+                    const pct = Math.round((r.score / r.maxScore) * 100);
+                    return `
+                        <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                            <div class="flex justify-between items-center mb-2">
+                                <h4 class="font-bold text-slate-800">${r.criterionName}</h4>
+                                <span class="font-mono font-bold ${pct >= 80 ? 'text-green-600' : pct >= 50 ? 'text-orange-500' : 'text-red-500'}">${r.score} / ${r.maxScore}</span>
+                            </div>
+                            <div class="w-full bg-slate-100 h-2 rounded-full mb-3">
+                                <div class="h-full rounded-full ${pct >= 80 ? 'bg-green-500' : pct >= 50 ? 'bg-orange-500' : 'bg-red-500'}" style="width: ${pct}%"></div>
+                            </div>
+                            <p class="text-sm text-slate-600 mb-3">${r.justification}</p>
+                            <div class="grid grid-cols-2 gap-4 text-xs">
+                                ${r.strengths.length ? `<div class="bg-green-50 text-green-700 p-2 rounded"><strong>Сильные стороны:</strong><ul class="list-disc ml-4 mt-1">${r.strengths.map(s=>`<li>${s}</li>`).join('')}</ul></div>` : ''}
+                                ${r.weaknesses.length ? `<div class="bg-orange-50 text-orange-700 p-2 rounded"><strong>Слабые стороны:</strong><ul class="list-disc ml-4 mt-1">${r.weaknesses.map(w=>`<li>${w}</li>`).join('')}</ul></div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                // Feedback Mock
+                document.getElementById('resFeedback').innerHTML = marked.parse(`### Общий вывод\n\nСтуденческая работа продемонстрировала ${percentage >= 70 ? 'хороший уровень' : 'базовый уровень'} понимания темы. \n\n**Рекомендации:**\n- Уделить больше внимания деталям в разделе "${results[0].criterionName}".\n- Проверить оформление согласно стандартам.`);
+
+                this.openModal('resultsModal');
+            }
+
+            saveToHistory() {
+                if (!this.state.currentResult) return;
+                this.state.history.unshift(this.state.currentResult);
+                if (this.state.history.length > 20) this.state.history.pop();
+                localStorage.setItem('sg_history', JSON.stringify(this.state.history));
+                
+                this.renderHistory();
+                this.updateStats();
+                this.closeModal('resultsModal');
+                this.showToast('Результат сохранен в историю', 'success');
+            }
+
+            renderHistory() {
+                const list = this.ui.historyList;
+                if (!this.state.history.length) {
+                    list.innerHTML = '<div class="text-center py-8 text-slate-400 text-sm"><i class="fa-regular fa-folder-open text-2xl mb-2 opacity-50"></i><p>История пуста</p></div>';
+                    return;
+                }
+
+                list.innerHTML = this.state.history.map((h, i) => `
+                    <div class="p-3 bg-slate-50 hover:bg-blue-50 rounded-lg border border-slate-100 cursor-pointer transition-colors group" onclick="app.loadHistoryItem(${i})">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-sm font-medium text-slate-800 truncate w-40">${h.fileName}</p>
+                                <p class="text-xs text-slate-500">${new Date(h.date).toLocaleDateString()}</p>
+                            </div>
+                            <div class="text-right">
+                                <span class="block text-lg font-bold ${h.grade === 'A' || h.grade === 'B' ? 'text-green-600' : 'text-slate-700'}">${h.score}%</span>
+                                <span class="text-xs font-bold bg-white border border-slate-200 px-1.5 rounded text-slate-600">${h.grade}</span>
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            loadHistoryItem(index) {
+                const item = this.state.history[index];
+                this.state.currentResult = item;
+                // Re-render modal with saved data (simplified for demo)
+                this.showResultsModal(); 
+                // Note: In a real app, we'd reconstruct the chart and list from saved data specifically
+            }
+
+            updateStats() {
+                this.ui.statCount.textContent = this.state.history.length;
+                if (this.state.history.length > 0) {
+                    const avg = Math.round(this.state.history.reduce((acc, curr) => acc + curr.score, 0) / this.state.history.length);
+                    this.ui.statAvg.textContent = avg;
+                } else {
+                    this.ui.statAvg.textContent = '-';
+                }
+            }
+
+            downloadReport() {
+                const r = this.state.currentResult;
+                const content = `# Отчет Smart Grader AI\n\nФайл: ${r.fileName}\nДата: ${new Date(r.date).toLocaleString()}\nОценка: ${r.score}% (${r.grade})\n\n## Детали\n${r.details.map(d => `- ${d.criterionName}: ${d.score}/${d.maxScore}`).join('\n')}`;
+                const blob = new Blob([content], { type: 'text/markdown' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `report_${r.fileName.split('.')[0]}.md`;
+                a.click();
+            }
+
+            // --- Modals & Utils ---
+
+            openModal(id) {
+                document.getElementById(id).classList.remove('hidden');
+                if (id === 'rubricModal') this.initRubricBuilder();
+            }
+
+            closeModal(id) {
+                document.getElementById(id).classList.add('hidden');
+            }
+
+            log(msg, type = 'info') {
+                const time = new Date().toLocaleTimeString();
+                // Light theme colors
+                const colors = { 
+                    info: 'text-blue-600', 
+                    success: 'text-green-600', 
+                    error: 'text-red-600', 
+                    warning: 'text-orange-600' 
+                };
+                const icons = { 
+                    info: 'fa-info-circle', 
+                    success: 'fa-check-circle', 
+                    error: 'fa-exclamation-circle', 
+                    warning: 'fa-triangle-exclamation' 
+                };
+                
+                const div = document.createElement('div');
+                div.className = `log-entry ${colors[type]}`;
+                div.innerHTML = `<span class="log-time">[${time}]</span><i class="fa-solid ${icons[type]} log-icon"></i> <span class="font-medium">${msg}</span>`;
+                this.ui.logContent.appendChild(div);
+                this.ui.logContent.scrollTop = this.ui.logContent.scrollHeight;
+            }
+
+            showToast(msg, type = 'info') {
+                const container = document.getElementById('toastContainer');
+                const colors = { success: 'bg-green-500', error: 'bg-red-500', info: 'bg-blue-500', warning: 'bg-orange-500' };
+                const icons = { success: 'fa-check', error: 'fa-xmark', info: 'fa-info', warning: 'fa-exclamation' };
+                
+                const toast = document.createElement('div');
+                toast.className = `toast toast-hidden flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg text-white ${colors[type]}`;
+                toast.innerHTML = `<i class="fa-solid ${icons[type]}"></i> <span class="font-medium text-sm">${msg}</span>`;
+                
+                container.appendChild(toast);
+                
+                // Animate in
+                requestAnimationFrame(() => toast.classList.remove('toast-hidden'));
+                
+                // Remove
+                setTimeout(() => {
+                    toast.classList.add('toast-hidden');
+                    setTimeout(() => toast.remove(), 300);
+                }, 4000);
+            }
+
+            // --- Rubric Builder Logic ---
+            
+            initRubricBuilder() {
+                document.getElementById('criteriaBuilder').innerHTML = '';
+                document.getElementById('newRubricName').value = '';
+                this.addCriterionRow(); // Add one empty row
+                this.updateTotalWeight();
+            }
+
+            addCriterionRow(data = { name: '', weight: 20, max: 10 }) {
+                const container = document.getElementById('criteriaBuilder');
+                const div = document.createElement('div');
+                div.className = 'flex gap-2 items-end bg-slate-50 p-2 rounded border border-slate-200';
+                div.innerHTML = `
+                    <div class="flex-1">
+                        <label class="text-xs text-slate-500">Название</label>
+                        <input type="text" value="${data.name}" class="crit-name w-full text-sm border-b border-slate-300 bg-transparent focus:border-blue-500 outline-none py-1" placeholder="Критерий...">
+                    </div>
+                    <div class="w-20">
+                        <label class="text-xs text-slate-500">Вес (%)</label>
+                        <input type="number" value="${data.weight}" class="crit-weight w-full text-sm border-b border-slate-300 bg-transparent focus:border-blue-500 outline-none py-1 text-center" onchange="app.updateTotalWeight()">
+                    </div>
+                    <div class="w-20">
+                        <label class="text-xs text-slate-500">Балл</label>
+                        <input type="number" value="${data.max}" class="crit-max w-full text-sm border-b border-slate-300 bg-transparent focus:border-blue-500 outline-none py-1 text-center">
+                    </div>
+                    <button onclick="this.parentElement.remove(); app.updateTotalWeight()" class="mb-1 text-slate-400 hover:text-red-500"><i class="fa-solid fa-trash"></i></button>
+                `;
+                container.appendChild(div);
+            }
+
+            updateTotalWeight() {
+                const weights = document.querySelectorAll('.crit-weight');
+                let total = 0;
+                weights.forEach(w => total += parseInt(w.value) || 0);
+                const el = document.getElementById('totalWeight');
+                el.textContent = total + '%';
+                el.className = total === 100 ? 'font-bold text-green-600' : 'font-bold text-red-500';
+            }
+
+            saveNewRubric() {
+                const name = document.getElementById('newRubricName').value;
+                if (!name) return this.showToast('Введите название рубрики', 'error');
+                
+                const weights = document.querySelectorAll('.crit-weight');
+                let total = 0;
+                weights.forEach(w => total += parseInt(w.value) || 0);
+                if (total !== 100) return this.showToast('Сумма весов должна быть 100%', 'error');
+
+                const criteria = [];
+                const rows = document.querySelectorAll('#criteriaBuilder > div');
+                rows.forEach(row => {
+                    criteria.push({
+                        id: 'c-' + Date.now() + Math.random(),
+                        name: row.querySelector('.crit-name').value,
+                        weight: parseInt(row.querySelector('.crit-weight').value),
+                        max: parseInt(row.querySelector('.crit-max').value)
+                    });
+                });
+
+                const newRubric = { id: 'r-' + Date.now(), name, criteria };
+                this.state.rubrics.push(newRubric);
+                localStorage.setItem('sg_rubrics', JSON.stringify(this.state.rubrics));
+                
+                this.renderRubricSelect();
+                this.selectRubric(newRubric.id);
+                this.closeModal('rubricModal');
+                this.showToast('Рубрика сохранена', 'success');
+            }
+
+            saveSettings() {
+                this.config.url = document.getElementById('settingUrl').value;
+                this.config.temp = parseFloat(document.getElementById('settingTemp').value);
+                this.config.maxTokens = parseInt(document.getElementById('settingTokens').value);
+                
+                localStorage.setItem('sg_url', this.config.url);
+                localStorage.setItem('sg_temp', this.config.temp);
+                localStorage.setItem('sg_tokens', this.config.maxTokens);
+                
+                this.closeModal('settingsModal');
+                this.showToast('Настройки сохранены', 'success');
+                this.checkConnection(); // Re-check connection with new URL
+            }
+        }
+
+        // Initialize App
+        const app = new SmartGrader();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Установка системы проверки студенческих работ</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-blue: #0078D7;
+            --primary-blue-hover: #0063B1;
+            --accent-cyan: #00B4D8;
+            --bg-color: #F3F5F9;
+            --window-bg: #FFFFFF;
+            --text-main: #1A1A1A;
+            --text-secondary: #666666;
+            --text-light: #9CA3AF;
+            --border-color: #E5E7EB;
+            --success-green: #10B981;
+            --input-bg: #F9FAFB;
+            --input-border: #D1D5DB;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(0, 120, 215, 0.08) 0%, transparent 25%),
+                radial-gradient(circle at 90% 80%, rgba(0, 180, 216, 0.08) 0%, transparent 25%);
+        }
+
+        .installer-window {
+            width: 520px;
+            background: var(--window-bg);
+            border-radius: 16px;
+            box-shadow: 
+                0 25px 50px rgba(0, 0, 0, 0.1),
+                0 0 0 1px rgba(255, 255, 255, 0.8) inset;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Header */
+        .header {
+            padding: 28px 32px 20px 32px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            border-bottom: 1px solid rgba(229, 231, 235, 0.5);
+        }
+
+        .app-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #F0F7FF 0%, #E0F2FE 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 16px rgba(0, 120, 215, 0.15);
+            flex-shrink: 0;
+        }
+
+        .app-icon img {
+            width: 36px;
+            height: 36px;
+            object-fit: contain;
+        }
+
+        .app-info h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-bottom: 4px;
+            letter-spacing: -0.02em;
+        }
+
+        .app-info p {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        /* Steps Indicator */
+        .steps-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            padding: 20px 32px 0 32px;
+        }
+
+        .step-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--border-color);
+            transition: all 0.3s ease;
+        }
+
+        .step-dot.active {
+            background: var(--primary-blue);
+            transform: scale(1.2);
+        }
+
+        .step-dot.completed {
+            background: var(--success-green);
+        }
+
+        /* Content Area */
+        .content {
+            padding: 32px;
+            flex-grow: 1;
+            min-height: 280px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .step {
+            display: none;
+            flex-direction: column;
+            gap: 24px;
+            animation: slideIn 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .step.active {
+            display: flex;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .step-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-main);
+            letter-spacing: -0.02em;
+        }
+
+        .step-description {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        /* Welcome Step */
+        .welcome-content {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .feature-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+            color: var(--text-main);
+        }
+
+        .feature-icon {
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, var(--primary-blue), var(--accent-cyan));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .feature-icon svg {
+            width: 12px;
+            height: 12px;
+            fill: white;
+        }
+
+        /* Folder Selection */
+        .folder-input-group {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .folder-input {
+            flex-grow: 1;
+            padding: 14px 16px;
+            border: 1px solid var(--input-border);
+            border-radius: 8px;
+            background: var(--input-bg);
+            font-size: 14px;
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .folder-input:hover {
+            border-color: var(--primary-blue);
+            background: #fff;
+        }
+
+        .folder-input:focus {
+            outline: none;
+            border-color: var(--primary-blue);
+            box-shadow: 0 0 0 3px rgba(0, 120, 215, 0.1);
+        }
+
+        .btn-browse {
+            padding: 14px 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--window-bg);
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-main);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .btn-browse:hover {
+            background: var(--bg-color);
+            border-color: var(--text-light);
+        }
+
+        .license-agreement {
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.7;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--input-border);
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .checkbox.checked {
+            background: var(--primary-blue);
+            border-color: var(--primary-blue);
+        }
+
+        .checkbox.checked svg {
+            display: block;
+        }
+
+        .checkbox svg {
+            display: none;
+            width: 12px;
+            height: 12px;
+            fill: white;
+        }
+
+        .checkbox-label {
+            font-size: 14px;
+            color: var(--text-main);
+            cursor: pointer;
+        }
+
+        /* Progress Step */
+        .progress-content {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .status-message {
+            font-size: 15px;
+            color: var(--text-main);
+            font-weight: 500;
+        }
+
+        .progress-wrapper {
+            position: relative;
+            height: 6px;
+            background: var(--input-bg);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--primary-blue), var(--accent-cyan));
+            border-radius: 3px;
+            transition: width 0.3s ease-out;
+            position: relative;
+        }
+
+        .progress-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 6px;
+            background: #fff;
+            box-shadow: 0 0 10px 3px rgba(255, 255, 255, 0.8);
+            opacity: 0.8;
+        }
+
+        .progress-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-light);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .file-list {
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            max-height: 100px;
+            overflow-y: auto;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .file-item {
+            padding: 4px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-item svg {
+            width: 14px;
+            height: 14px;
+            fill: var(--primary-blue);
+            flex-shrink: 0;
+        }
+
+        /* Success Step */
+        .success-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 20px;
+            padding: 20px 0;
+        }
+
+        .success-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.2);
+            animation: scaleIn 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        @keyframes scaleIn {
+            from { transform: scale(0); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .success-icon svg {
+            width: 40px;
+            height: 40px;
+            fill: var(--success-green);
+        }
+
+        .success-title {
+            font-size: 22px;
+            font-weight: 600;
+            color: var(--text-main);
+            letter-spacing: -0.02em;
+        }
+
+        .success-message {
+            font-size: 15px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            max-width: 400px;
+        }
+
+        .success-details {
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px 20px;
+            width: 100%;
+            text-align: left;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .detail-row:first-child {
+            padding-top: 0;
+        }
+
+        .detail-label {
+            color: var(--text-light);
+        }
+
+        .detail-value {
+            color: var(--text-main);
+            font-weight: 500;
+        }
+
+        .checkbox-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .checkbox-option .checkbox-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        /* Footer */
+        .footer {
+            padding: 20px 32px;
+            border-top: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-left {
+            font-size: 12px;
+            color: var(--text-light);
+        }
+
+        .footer-buttons {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-color);
+            border-color: var(--text-light);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary-blue), var(--primary-blue-hover));
+            color: white;
+            box-shadow: 0 4px 12px rgba(0, 120, 215, 0.3);
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 6px 16px rgba(0, 120, 215, 0.4);
+            transform: translateY(-1px);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, var(--success-green), #059669);
+            color: white;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-success:hover {
+            box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+            transform: translateY(-1px);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-light);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="installer-window">
+        <!-- Header -->
+        <div class="header">
+            <div class="app-icon">
+                <img src="https://image.qwenlm.ai/public_source/eea91e97-b5fc-4f54-9abd-e2845363a9f7/13ae9b3d6-8a22-4665-ad80-b8ee95e8a40e.png" alt="Icon">
+            </div>
+            <div class="app-info">
+                <h1>САПСР</h1>
+                <p>Система автоматизированной проверки студенческих работ</p>
+            </div>
+        </div>
+
+        <!-- Steps Indicator -->
+        <div class="steps-indicator">
+            <div class="step-dot active" data-step="1"></div>
+            <div class="step-dot" data-step="2"></div>
+            <div class="step-dot" data-step="3"></div>
+            <div class="step-dot" data-step="4"></div>
+        </div>
+
+        <!-- Content -->
+        <div class="content">
+            <!-- Step 1: Welcome -->
+            <div class="step active" id="step-1">
+                <h2 class="step-title">Добро пожаловать</h2>
+                <p class="step-description">Мастер установки поможет вам настроить САПСР на вашем компьютере.</p>
+                
+                <div class="welcome-content">
+                    <p class="step-description">Эта программа установит следующие компоненты:</p>
+                    <ul class="feature-list">
+                        <li class="feature-item">
+                            <div class="feature-icon">
+                                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            </div>
+                            <span>Ядро системы проверки работ</span>
+                        </li>
+                        <li class="feature-item">
+                            <div class="feature-icon">
+                                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            </div>
+                            <span>Модуль анализа кода</span>
+                        </li>
+                        <li class="feature-item">
+                            <div class="feature-icon">
+                                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            </div>
+                            <span>Интерфейс преподавателя</span>
+                        </li>
+                        <li class="feature-item">
+                            <div class="feature-icon">
+                                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            </div>
+                            <span>Средство отправки работ студентами</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Step 2: Folder Selection -->
+            <div class="step" id="step-2">
+                <h2 class="step-title">Выберите папку установки</h2>
+                <p class="step-description">Укажите директорию, куда будет установлена система.</p>
+                
+                <div class="folder-input-group">
+                    <input type="text" class="folder-input" id="install-path" value="C:\Program Files\САПСР" readonly>
+                    <button class="btn-browse" id="btn-browse">Обзор...</button>
+                </div>
+
+                <div class="license-agreement">
+                    <strong>Лицензионное соглашение</strong><br><br>
+                    Настоящим вы принимаете условия использования программного обеспечения САПСР. 
+                    Программа предоставляется «как есть» без каких-либо гарантий. 
+                    Вы соглашаетесь использовать программу только в образовательных целях.
+                    Копирование и распространение без разрешения запрещено.
+                </div>
+
+                <div class="checkbox-group" id="license-checkbox">
+                    <div class="checkbox">
+                        <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
+                    <span class="checkbox-label">Я принимаю условия лицензионного соглашения</span>
+                </div>
+            </div>
+
+            <!-- Step 3: Installation Progress -->
+            <div class="step" id="step-3">
+                <h2 class="step-title">Установка</h2>
+                <p class="step-description">Пожалуйста, дождитесь завершения установки.</p>
+                
+                <div class="progress-content">
+                    <div class="status-message" id="status-text">Подготовка к установке...</div>
+                    
+                    <div class="progress-wrapper">
+                        <div class="progress-bar" id="progress-bar"></div>
+                    </div>
+
+                    <div class="progress-details">
+                        <span id="percentage">0%</span>
+                        <span id="time-remaining">Осталось: --:--</span>
+                    </div>
+
+                    <div class="file-list" id="file-list">
+                        <div class="file-item">
+                            <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+                            <span>Ожидание начала установки...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4: Success -->
+            <div class="step" id="step-4">
+                <div class="success-content">
+                    <div class="success-icon">
+                        <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    </div>
+                    
+                    <h2 class="success-title">Установка завершена</h2>
+                    
+                    <p class="success-message">
+                        Система автоматизированной проверки студенческих работ успешно установлена на ваш компьютер
+                    </p>
+
+                    <div class="success-details">
+                        <div class="detail-row">
+                            <span class="detail-label">Версия:</span>
+                            <span class="detail-value">2.4.0</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Путь установки:</span>
+                            <span class="detail-value" id="final-path">C:\Program Files\САПСР</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Дата установки:</span>
+                            <span class="detail-value" id="install-date">--.--.----</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Размер:</span>
+                            <span class="detail-value">248 МБ</span>
+                        </div>
+                    </div>
+
+                    <div class="checkbox-option" id="launch-checkbox">
+                        <div class="checkbox checked">
+                            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                        </div>
+                        <span class="checkbox-label">Запустить систему после закрытия</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div class="footer-left" id="footer-info">Шаг 1 из 4</div>
+            <div class="footer-buttons">
+                <button class="btn btn-secondary" id="btn-back" disabled>Назад</button>
+                <button class="btn btn-primary" id="btn-next">Далее</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentStep = 1;
+        const totalSteps = 4;
+        let licenseAccepted = false;
+        let isInstalling = false;
+        let launchOnFinish = true;
+
+        // Elements
+        const stepDots = document.querySelectorAll('.step-dot');
+        const steps = document.querySelectorAll('.step');
+        const btnBack = document.getElementById('btn-back');
+        const btnNext = document.getElementById('btn-next');
+        const footerInfo = document.getElementById('footer-info');
+        const installPath = document.getElementById('install-path');
+        const btnBrowse = document.getElementById('btn-browse');
+        const licenseCheckbox = document.getElementById('license-checkbox');
+        const launchCheckbox = document.getElementById('launch-checkbox');
+        const progressBar = document.getElementById('progress-bar');
+        const statusText = document.getElementById('status-text');
+        const percentage = document.getElementById('percentage');
+        const timeRemaining = document.getElementById('time-remaining');
+        const fileList = document.getElementById('file-list');
+        const finalPath = document.getElementById('final-path');
+        const installDate = document.getElementById('install-date');
+
+        // Installation steps
+        const installSteps = [
+            { threshold: 5, text: "Проверка системных требований...", file: "Проверка совместимости" },
+            { threshold: 15, text: "Распаковка архивов...", file: "core.zip" },
+            { threshold: 25, text: "Копирование файлов ядра...", file: "sapsr-core.dll" },
+            { threshold: 35, text: "Установка модуля анализа...", file: "analyzer.exe" },
+            { threshold: 45, text: "Копирование интерфейса...", file: "ui-components/" },
+            { threshold: 55, text: "Настройка реестра...", file: "registry-keys.reg" },
+            { threshold: 65, text: "Установка драйверов...", file: "drivers/" },
+            { threshold: 75, text: "Создание ярлыков...", file: "shortcuts.lnk" },
+            { threshold: 85, text: "Настройка прав доступа...", file: "permissions.xml" },
+            { threshold: 95, text: "Финальная настройка...", file: "config.ini" },
+            { threshold: 100, text: "Завершение установки", file: "Установка завершена" }
+        ];
+
+        // Update UI
+        function updateStepIndicator() {
+            stepDots.forEach((dot, index) => {
+                dot.classList.remove('active', 'completed');
+                if (index + 1 < currentStep) {
+                    dot.classList.add('completed');
+                } else if (index + 1 === currentStep) {
+                    dot.classList.add('active');
+                }
+            });
+
+            steps.forEach((step, index) => {
+                step.classList.remove('active');
+                if (index + 1 === currentStep) {
+                    step.classList.add('active');
+                }
+            });
+
+            footerInfo.textContent = `Шаг ${currentStep} из ${totalSteps}`;
+            btnBack.disabled = currentStep === 1 || isInstalling;
+            
+            if (currentStep === 4) {
+                btnNext.textContent = "Закрыть";
+                btnNext.classList.add('btn-success');
+                btnNext.classList.remove('btn-primary');
+                btnBack.style.display = 'none';
+            } else if (currentStep === 2) {
+                btnNext.disabled = !licenseAccepted;
+                btnNext.textContent = "Установить";
+            } else {
+                btnNext.textContent = "Далее";
+                btnNext.disabled = false;
+            }
+        }
+
+        // Navigation
+        function goToStep(step) {
+            if (isInstalling && step === 2) return;
+            currentStep = step;
+            updateStepIndicator();
+
+            if (currentStep === 3) {
+                startInstallation();
+            }
+        }
+
+        btnNext.addEventListener('click', () => {
+            if (currentStep === 4) {
+                if (launchOnFinish) {
+                    alert("Запуск системы автоматизированной проверки студенческих работ...");
+                }
+                document.querySelector('.installer-window').style.animation = 'fadeOut 0.3s ease forwards';
+                setTimeout(() => {
+                    document.body.innerHTML = '<div style="text-align:center;color:#666;">Приложение закрыто</div>';
+                }, 300);
+                return;
+            }
+            goToStep(currentStep + 1);
+        });
+
+        btnBack.addEventListener('click', () => {
+            if (currentStep > 1 && !isInstalling) {
+                goToStep(currentStep - 1);
+            }
+        });
+
+        // License checkbox
+        licenseCheckbox.addEventListener('click', () => {
+            licenseAccepted = !licenseAccepted;
+            licenseCheckbox.querySelector('.checkbox').classList.toggle('checked', licenseAccepted);
+            btnNext.disabled = !licenseAccepted;
+        });
+
+        // Launch checkbox
+        launchCheckbox.addEventListener('click', () => {
+            launchOnFinish = !launchOnFinish;
+            launchCheckbox.querySelector('.checkbox').classList.toggle('checked', launchOnFinish);
+        });
+
+        // Browse button
+        btnBrowse.addEventListener('click', () => {
+            // Simulate folder selection
+            const paths = [
+                "C:\\Program Files\\САПСР",
+                "C:\\Apps\\САПСР",
+                "D:\\Software\\САПСР",
+                "C:\\Users\\Admin\\САПСР"
+            ];
+            const randomPath = paths[Math.floor(Math.random() * paths.length)];
+            installPath.value = randomPath;
+        });
+
+        // Installation simulation
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function addFileEntry(fileName) {
+            const div = document.createElement('div');
+            div.className = 'file-item';
+            div.innerHTML = `
+                <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+                <span>${fileName}</span>
+            `;
+            fileList.insertBefore(div, fileList.firstChild);
+            
+            // Keep only last 5 items
+            while (fileList.children.length > 5) {
+                fileList.removeChild(fileList.lastChild);
+            }
+        }
+
+        function startInstallation() {
+            isInstalling = true;
+            btnBack.disabled = true;
+            btnNext.disabled = true;
+            
+            let progress = 0;
+            const startTime = Date.now();
+            const totalDuration = 8000; // 8 seconds
+
+            function animate() {
+                if (!isInstalling) return;
+
+                const elapsed = Date.now() - startTime;
+                progress = Math.min(100, (elapsed / totalDuration) * 100);
+
+                // Find current step
+                const currentInstallStep = installSteps.slice().reverse().find(step => progress >= step.threshold);
+                
+                if (currentInstallStep) {
+                    statusText.textContent = currentInstallStep.text;
+                    addFileEntry(currentInstallStep.file);
+                }
+
+                progressBar.style.width = `${progress}%`;
+                percentage.textContent = `${Math.floor(progress)}%`;
+
+                const remainingSeconds = Math.max(0, Math.ceil((totalDuration - elapsed) / 1000));
+                timeRemaining.textContent = `Осталось: ${formatTime(remainingSeconds)}`;
+
+                if (progress < 100) {
+                    requestAnimationFrame(animate);
+                } else {
+                    // Installation complete
+                    setTimeout(() => {
+                        finalPath.textContent = installPath.value;
+                        const now = new Date();
+                        installDate.textContent = now.toLocaleDateString('ru-RU');
+                        goToStep(4);
+                    }, 500);
+                }
+            }
+
+            animate();
+        }
+
+        // Initialize
+        updateStepIndicator();
+
+        // Add fade out animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes fadeOut {
+                from { opacity: 1; transform: scale(1); }
+                to { opacity: 0; transform: scale(0.95); }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>
+

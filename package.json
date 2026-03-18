@@ -1,0 +1,74 @@
+{
+  "name": "studchecker",
+  "version": "1.0.0",
+  "description": "AI-powered student work checker using local llama-server",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "build": "node scripts/build.js",
+    "preview": "cross-env ELECTRON_RUN_AS_NODE=0 electron-vite preview",
+    "build:win": "npm run build && electron-builder --win",
+    "pack:win": "node scripts/pack.js"
+  },
+  "dependencies": {
+    "chart.js": "^4.4.2",
+    "mammoth": "^1.7.0",
+    "marked": "^12.0.0",
+    "pdfjs-dist": "^3.11.174",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "cross-env": "^7.0.3",
+    "electron": "^29.1.1",
+    "electron-builder": "^24.9.1",
+    "electron-vite": "^2.0.0",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12"
+  },
+  "build": {
+    "appId": "com.studchecker.app",
+    "productName": "АСПСР",
+    "icon": "build/icon.ico",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      { "from": "logo_studchecker.png", "to": "logo_studchecker.png" },
+      { "from": "temp",                 "to": "temp"                 }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeader": "build/header.bmp",
+      "installerSidebar": "build/sidebar.bmp",
+      "include": "build/installer.nsh",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "АСПСР",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "warningsAsErrors": false
+    }
+  }
+}

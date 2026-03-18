@@ -1,0 +1,1654 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Проверка Работ | Smart Grader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
+    <!-- PDF.js для чтения PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- Mammoth.js для чтения DOCX -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.3); }
+            50% { box-shadow: 0 0 40px rgba(99, 102, 241, 0.6); }
+        }
+
+        @keyframes slide-in {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-slide-in { animation: slide-in 0.5s ease-out; }
+        .animate-pulse-glow { animation: pulse-glow 2s infinite; }
+
+        .glass {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .glass-card {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #818cf8, #c084fc, #f472b6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online { background: #10b981; box-shadow: 0 0 10px #10b981; }
+        .status-offline { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
+        .status-loading { background: #f59e0b; animation: pulse 1s infinite; }
+
+        pre {
+            background: #1e293b;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            border: 1px solid #334155;
+        }
+        code { font-family: 'JetBrains Mono', monospace; color: #e2e8f0; }
+
+        .drop-zone {
+            border: 2px dashed #4f46e5;
+            background: rgba(79, 70, 229, 0.05);
+            transition: all 0.3s ease;
+        }
+        .drop-zone.dragover {
+            background: rgba(79, 70, 229, 0.15);
+            border-color: #818cf8;
+            transform: scale(1.02);
+        }
+
+        .progress-fill {
+            background: linear-gradient(90deg, #4f46e5, #7c3aed, #c026d3);
+            background-size: 200% 100%;
+            animation: gradient-shift 2s ease infinite;
+        }
+        @keyframes gradient-shift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .model-card {
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .model-card:hover { transform: translateY(-2px); border-color: #6366f1; }
+        .model-card.selected {
+            border-color: #6366f1;
+            background: rgba(99, 102, 241, 0.1);
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+        }
+
+        .rubric-item {
+            transition: all 0.2s ease;
+        }
+        .rubric-item:hover {
+            background: rgba(99, 102, 241, 0.05);
+            transform: translateX(4px);
+        }
+
+        .toast {
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+        }
+        .toast.show { transform: translateX(0); }
+
+        .criterion-score {
+            transition: all 0.3s ease;
+        }
+        .criterion-score.updated {
+            animation: score-update 0.5s ease;
+        }
+        @keyframes score-update {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); color: #818cf8; }
+            100% { transform: scale(1); }
+        }
+
+        .file-type-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .badge-pdf { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+        .badge-docx { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+        .badge-txt { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen overflow-x-hidden">
+    <!-- Background Effects -->
+    <div class="fixed inset-0 overflow-hidden pointer-events-none">
+        <div class="absolute top-0 left-1/4 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl"></div>
+        <div class="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl"></div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="fixed top-0 w-full z-50 glass border-b border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center animate-pulse-glow">
+                        <i class="fas fa-graduation-cap text-white text-lg"></i>
+                    </div>
+                    <span class="text-xl font-bold gradient-text">Smart Grader AI</span>
+                </div>
+
+                <div class="flex items-center gap-6">
+                    <div class="flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/50 border border-slate-700">
+                        <div class="flex items-center gap-2">
+                            <span id="connectionStatus" class="status-dot status-offline"></span>
+                            <span class="text-sm font-medium text-slate-400">LM Studio</span>
+                        </div>
+                        <div class="h-4 w-px bg-slate-700"></div>
+                        <button onclick="app.checkConnection()" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                            <i class="fas fa-sync-alt mr-1"></i>Проверить
+                        </button>
+                    </div>
+
+                    <button onclick="app.openSettings()" class="p-2 rounded-lg hover:bg-slate-800 transition-colors">
+                        <i class="fas fa-cog text-slate-400"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="pt-24 pb-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto relative z-10">
+
+        <!-- Hero Section -->
+        <div class="text-center mb-12 animate-slide-in">
+            <h1 class="text-5xl font-bold mb-4">
+                <span class="gradient-text">Проверка работ</span> с локальным ИИ
+            </h1>
+            <p class="text-slate-400 text-lg max-w-2xl mx-auto">
+                Автоматизированная оценка студенческих работ с использованием локальных моделей через LM Studio.
+            </p>
+        </div>
+
+        <!-- Dashboard Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+            <!-- Left Panel: Upload & Configuration -->
+            <div class="lg:col-span-4 space-y-6">
+
+                <!-- Upload Zone -->
+                <div class="glass-card rounded-2xl p-6">
+                    <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <i class="fas fa-cloud-upload-alt text-indigo-400"></i>
+                        Загрузка работы
+                    </h3>
+
+                    <div id="dropZone" class="drop-zone rounded-xl p-8 text-center cursor-pointer" 
+                         ondrop="app.handleDrop(event)" 
+                         ondragover="app.handleDragOver(event)"
+                         ondragleave="app.handleDragLeave(event)"
+                         onclick="document.getElementById('fileInput').click()">
+                        <input type="file" id="fileInput" class="hidden" accept=".pdf,.docx,.txt,.md,.py,.js,.html,.css,.json,.java,.cpp,.c,.h" 
+                               onchange="app.handleFileSelect(event)">
+                        <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                            <i class="fas fa-file-upload text-2xl text-indigo-400"></i>
+                        </div>
+                        <p class="text-slate-300 font-medium mb-2">Перетащите файл или нажмите</p>
+                        <div class="flex justify-center gap-2 flex-wrap">
+                            <span class="file-type-badge badge-pdf"><i class="fas fa-file-pdf"></i> PDF</span>
+                            <span class="file-type-badge badge-docx"><i class="fas fa-file-word"></i> DOCX</span>
+                            <span class="file-type-badge badge-txt"><i class="fas fa-file-alt"></i> TXT/MD/Код</span>
+                        </div>
+                    </div>
+
+                    <div id="fileInfo" class="hidden mt-4 p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-3">
+                                <i id="fileIcon" class="fas fa-file-alt text-indigo-400"></i>
+                                <div>
+                                    <p id="fileName" class="font-medium text-sm truncate max-w-[200px]"></p>
+                                    <p id="fileSize" class="text-xs text-slate-500"></p>
+                                    <p id="filePreview" class="text-xs text-slate-400 mt-1 truncate max-w-[250px]"></p>
+                                </div>
+                            </div>
+                            <button onclick="app.clearFile()" class="text-slate-500 hover:text-red-400">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Model Selection -->
+                <div class="glass-card rounded-2xl p-6">
+                    <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <i class="fas fa-brain text-purple-400"></i>
+                        Модель ИИ
+                    </h3>
+
+                    <div id="modelList" class="space-y-2 max-h-64 overflow-y-auto">
+                        <div class="text-center text-slate-500 py-4">
+                            <i class="fas fa-spinner fa-spin mr-2"></i>
+                            Загрузка моделей...
+                        </div>
+                    </div>
+
+                    <button onclick="app.refreshModels()" class="mt-4 w-full py-2 rounded-lg border border-slate-700 hover:bg-slate-800 transition-colors text-sm">
+                        <i class="fas fa-sync-alt mr-2"></i>Обновить список
+                    </button>
+                </div>
+
+                <!-- Rubric Selection -->
+                <div class="glass-card rounded-2xl p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold flex items-center gap-2">
+                            <i class="fas fa-clipboard-list text-pink-400"></i>
+                            Рубрика
+                        </h3>
+                        <div class="flex gap-2">
+                            <button onclick="app.resetRubrics()" class="text-xs text-slate-400 hover:text-red-400" title="Сбросить все рубрики">
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                            <button onclick="app.openRubricBuilder()" class="text-xs text-indigo-400 hover:text-indigo-300">
+                                + Создать
+                            </button>
+                        </div>
+                    </div>
+
+                    <select id="rubricSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-indigo-500 mb-2">
+                        <option value="">-- Выберите рубрику --</option>
+                    </select>
+                    <div id="rubricStatus" class="text-xs text-slate-500 hidden"></div>
+
+                    <div id="rubricPreview" class="hidden mt-4 space-y-2">
+                        <!-- Dynamic rubric preview -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center Panel: Analysis Progress -->
+            <div class="lg:col-span-5 space-y-6">
+
+                <!-- Main Action -->
+                <div class="glass-card rounded-2xl p-8 text-center">
+                    <button id="startBtn" onclick="app.startAnalysis()" 
+                            class="w-full py-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-lg transition-all transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/25">
+                        <i class="fas fa-play mr-2"></i>
+                        Начать проверку
+                    </button>
+                    <p class="mt-3 text-sm text-slate-500">
+                        Анализ выполняется локально через LM Studio
+                    </p>
+                </div>
+
+                <!-- Progress Panel -->
+                <div id="progressPanel" class="hidden glass-card rounded-2xl p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold">Прогресс проверки</h3>
+                        <span id="progressPercent" class="text-indigo-400 font-mono">0%</span>
+                    </div>
+
+                    <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden mb-4">
+                        <div id="progressBar" class="progress-fill h-full w-0 transition-all duration-500"></div>
+                    </div>
+
+                    <div id="expertSteps" class="space-y-3">
+                        <!-- Dynamic expert steps -->
+                    </div>
+                </div>
+
+                <!-- Live Log -->
+                <div class="glass-card rounded-2xl p-6">
+                    <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <i class="fas fa-terminal text-slate-400"></i>
+                        Журнал выполнения
+                    </h3>
+                    <div id="logConsole" class="mono text-xs h-64 overflow-y-auto bg-slate-950 rounded-lg p-4 border border-slate-800 space-y-1">
+                        <div class="text-slate-500">[SYSTEM] Ожидание начала проверки...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Results -->
+            <div class="lg:col-span-3 space-y-6">
+
+                <!-- Quick Stats -->
+                <div class="glass-card rounded-2xl p-6">
+                    <h3 class="text-lg font-semibold mb-4">Статистика</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="text-center p-3 rounded-lg bg-slate-800/50">
+                            <div id="statTotal" class="text-2xl font-bold text-indigo-400">0</div>
+                            <div class="text-xs text-slate-500">Проверено</div>
+                        </div>
+                        <div class="text-center p-3 rounded-lg bg-slate-800/50">
+                            <div id="statAvg" class="text-2xl font-bold text-purple-400">-</div>
+                            <div class="text-xs text-slate-500">Средний балл</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Reports -->
+                <div class="glass-card rounded-2xl p-6">
+                    <h3 class="text-lg font-semibold mb-4">История</h3>
+                    <div id="historyList" class="space-y-3 max-h-96 overflow-y-auto">
+                        <div class="text-center text-slate-500 py-8 text-sm">История пуста</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Modal -->
+        <div id="resultsModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div class="glass-card rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+                <div class="p-6 border-b border-slate-700 flex items-center justify-between">
+                    <h2 class="text-2xl font-bold gradient-text">Отчет о проверке</h2>
+                    <button onclick="app.closeResults()" class="p-2 hover:bg-slate-800 rounded-lg">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+
+                <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                    <!-- Grade Overview -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="col-span-2 glass rounded-xl p-6 border border-indigo-500/30">
+                            <div class="flex items-center justify-between mb-4">
+                                <h3 class="text-lg font-semibold">Итоговая оценка</h3>
+                                <span id="finalGrade" class="text-4xl font-bold text-indigo-400">-</span>
+                            </div>
+                            <p id="gradeComment" class="text-slate-300"></p>
+                        </div>
+                        <div class="glass rounded-xl p-6 flex items-center justify-center">
+                            <canvas id="gradeChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Criteria Scores -->
+                    <div class="glass rounded-xl p-6">
+                        <h3 class="text-lg font-semibold mb-4">Оценки по критериям</h3>
+                        <div id="criteriaScores" class="space-y-4">
+                            <!-- Dynamic criteria scores -->
+                        </div>
+                    </div>
+
+                    <!-- Detailed Feedback -->
+                    <div class="glass rounded-xl p-6">
+                        <h3 class="text-lg font-semibold mb-4">Детальный разбор</h3>
+                        <div id="detailedFeedback" class="prose prose-invert max-w-none">
+                            <!-- Markdown content -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="p-6 border-t border-slate-700 flex gap-3">
+                    <button onclick="app.downloadReport()" class="flex-1 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors">
+                        <i class="fas fa-download mr-2"></i>Скачать отчет
+                    </button>
+                    <button onclick="app.saveToHistory()" class="flex-1 py-3 rounded-lg border border-slate-700 hover:bg-slate-800 transition-colors">
+                        <i class="fas fa-save mr-2"></i>Сохранить
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div class="glass-card rounded-2xl w-full max-w-lg p-6">
+                <h2 class="text-xl font-bold mb-6">Настройки подключения</h2>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-2">LM Studio API URL</label>
+                        <input type="text" id="lmStudioUrl" value="http://localhost:1234" 
+                               class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:border-indigo-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Температура: <span id="tempValue">0.7</span></label>
+                        <input type="range" id="temperature" min="0" max="1" step="0.1" value="0.7" 
+                               class="w-full accent-indigo-500" 
+                               oninput="document.getElementById('tempValue').textContent = this.value">
+                        <div class="flex justify-between text-xs text-slate-500 mt-1">
+                            <span>Точность (0)</span>
+                            <span>Креативность (1)</span>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Max Tokens</label>
+                        <select id="maxTokens" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2">
+                            <option value="2048">2048 (быстро)</option>
+                            <option value="4096" selected>4096 (стандарт)</option>
+                            <option value="8192">8192 (детально)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="mt-6 flex gap-3">
+                    <button onclick="app.saveSettings()" class="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium">
+                        Сохранить
+                    </button>
+                    <button onclick="app.closeSettings()" class="flex-1 py-2 rounded-lg border border-slate-700 hover:bg-slate-800">
+                        Отмена
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Rubric Builder Modal -->
+        <div id="rubricModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div class="glass-card rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+                <div class="p-6 border-b border-slate-700">
+                    <h2 class="text-xl font-bold">Конструктор рубрик</h2>
+                </div>
+
+                <div class="flex-1 overflow-y-auto p-6 space-y-4">
+                    <input type="text" id="rubricName" placeholder="Название рубрики..." 
+                           class="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-lg font-medium">
+
+                    <div id="rubricItems" class="space-y-3">
+                        <!-- Dynamic rubric items -->
+                    </div>
+
+                    <button onclick="app.addRubricItem()" class="w-full py-3 rounded-lg border border-dashed border-slate-600 hover:border-indigo-500 hover:bg-indigo-500/10 text-slate-400 hover:text-indigo-400">
+                        <i class="fas fa-plus mr-2"></i>Добавить критерий
+                    </button>
+                </div>
+
+                <div class="p-6 border-t border-slate-700 flex gap-3">
+                    <button onclick="app.saveRubric()" class="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium">
+                        Сохранить рубрику
+                    </button>
+                    <button onclick="app.closeRubricBuilder()" class="px-6 py-2 rounded-lg border border-slate-700 hover:bg-slate-800">
+                        Отмена
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
+
+    <script>
+
+// Настройка PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+class SmartGrader {
+    constructor() {
+        this.config = {
+            lmStudioUrl: localStorage.getItem('lmStudioUrl') || 'http://localhost:1234',
+            temperature: parseFloat(localStorage.getItem('temperature')) || 0.3,
+            maxTokens: parseInt(localStorage.getItem('maxTokens')) || 4096
+        };
+
+        this.state = {
+            currentFile: null,
+            fileContent: null,
+            selectedModel: null,
+            selectedRubric: null,
+            isAnalyzing: false,
+            models: [],
+            rubrics: JSON.parse(localStorage.getItem('rubrics') || '[]'),
+            history: JSON.parse(localStorage.getItem('history') || '[]'),
+            currentResult: null,
+            expertResults: {},
+            evaluationPlan: null
+        };
+
+        this.init();
+    }
+
+    init() {
+        this.migrateRubrics();
+        this.loadRubrics();
+        this.loadHistory();
+        this.checkConnection();
+
+        if (this.state.rubrics.length === 0) {
+            this.createDefaultRubric();
+        }
+
+        this.updateRubricStatus();
+    }
+
+    migrateRubrics() {
+        let modified = false;
+        this.state.rubrics = this.state.rubrics.map(r => {
+            if (typeof r.id === 'number') {
+                r.id = String(r.id);
+                modified = true;
+            }
+            if (!r.criteria || !Array.isArray(r.criteria)) {
+                r.criteria = [];
+                modified = true;
+            }
+            return r;
+        });
+
+        if (modified) {
+            this.saveRubrics();
+        }
+    }
+
+    resetRubrics() {
+        if (confirm('Удалить все рубрики и создать стандартную заново?')) {
+            this.state.rubrics = [];
+            this.state.selectedRubric = null;
+            localStorage.removeItem('rubrics');
+            this.createDefaultRubric();
+            this.loadRubrics();
+            this.showToast('Рубрики сброшены', 'success');
+        }
+    }
+
+    updateRubricStatus() {
+        const statusEl = document.getElementById('rubricStatus');
+        if (!statusEl) return;
+
+        if (this.state.selectedRubric) {
+            statusEl.textContent = `Выбрано: ${this.state.selectedRubric.name} (${this.state.selectedRubric.criteria.length} критериев)`;
+            statusEl.className = 'text-xs text-green-400';
+            statusEl.classList.remove('hidden');
+        } else {
+            statusEl.textContent = '⚠️ Рубрика не выбрана';
+            statusEl.className = 'text-xs text-red-400';
+            statusEl.classList.remove('hidden');
+        }
+    }
+
+    async checkConnection() {
+        const statusDot = document.getElementById('connectionStatus');
+        const text = statusDot.parentElement.querySelector('span:last-child') || statusDot.nextElementSibling;
+
+        statusDot.className = 'status-dot status-loading';
+        if (text) text.textContent = 'Проверка...';
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+            const response = await fetch(`${this.config.lmStudioUrl}/v1/models`, {
+                method: 'GET',
+                signal: controller.signal,
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+                const data = await response.json();
+                this.state.models = data.data || [];
+                this.renderModels();
+
+                statusDot.className = 'status-dot status-online';
+                if (text) text.textContent = `LM Studio (${this.state.models.length} моделей)`;
+
+                this.log('✅ Подключение к LM Studio установлено', 'success');
+            } else {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+        } catch (error) {
+            statusDot.className = 'status-dot status-offline';
+            let errorMsg = 'LM Studio недоступен';
+            if (text) text.textContent = errorMsg;
+            this.log(`❌ ${errorMsg}: ${error.message}`, 'error');
+            this.renderMockModels();
+        }
+    }
+
+    async refreshModels() {
+        await this.checkConnection();
+        this.showToast('Список моделей обновлен', 'success');
+    }
+
+    handleDragOver(e) {
+        e.preventDefault();
+        e.currentTarget.classList.add('dragover');
+    }
+
+    handleDragLeave(e) {
+        e.currentTarget.classList.remove('dragover');
+    }
+
+    handleDrop(e) {
+        e.preventDefault();
+        e.currentTarget.classList.remove('dragover');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) this.processFile(files[0]);
+    }
+
+    handleFileSelect(e) {
+        const file = e.target.files[0];
+        if (file) this.processFile(file);
+    }
+
+    async processFile(file) {
+        const extension = '.' + file.name.split('.').pop().toLowerCase();
+        
+        this.log(`📄 Загрузка файла: ${file.name} (${this.formatFileSize(file.size)})`, 'info');
+
+        try {
+            let content = null;
+            let iconClass = 'fa-file-alt';
+            let fileType = 'text';
+
+            if (extension === '.pdf') {
+                this.log('🔍 Извлечение текста из PDF...', 'info');
+                content = await this.extractTextFromPDF(file);
+                iconClass = 'fa-file-pdf text-red-400';
+                fileType = 'pdf';
+            } else if (extension === '.docx') {
+                this.log('🔍 Извлечение текста из DOCX...', 'info');
+                content = await this.extractTextFromDOCX(file);
+                iconClass = 'fa-file-word text-blue-400';
+                fileType = 'docx';
+            } else {
+                // Текстовые файлы
+                const textExtensions = ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.java', '.cpp', '.c', '.h', '.cs', '.php', '.rb', '.go', '.rs', '.swift', '.kt', '.ts', '.jsx', '.tsx', '.sql', '.xml', '.yaml', '.yml'];
+                if (!textExtensions.includes(extension)) {
+                    this.showToast(`Формат ${extension} не поддерживается. Используйте PDF, DOCX или текстовые файлы.`, 'error');
+                    return;
+                }
+                content = await this.readFileContent(file);
+                iconClass = 'fa-file-code text-green-400';
+                fileType = 'text';
+            }
+
+            if (!content || content.trim().length === 0) {
+                this.showToast('Не удалось извлечь текст из файла или файл пуст', 'error');
+                return;
+            }
+
+            // Ограничиваем размер текста (чтобы не превысить лимиты LLM)
+            const maxChars = 15000;
+            if (content.length > maxChars) {
+                this.log(`⚠️ Текст слишком длинный (${content.length} символов), обрезаем до ${maxChars}`, 'warning');
+                content = content.substring(0, maxChars) + '\n\n[... текст обрезан ...]';
+            }
+
+            this.state.currentFile = file;
+            this.state.fileContent = content;
+
+            document.getElementById('fileInfo').classList.remove('hidden');
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = `${this.formatFileSize(file.size)} • ${content.length} символов`;
+            
+            const fileIcon = document.getElementById('fileIcon');
+            fileIcon.className = `fas ${iconClass}`;
+            
+            // Показываем начало текста для проверки
+            const preview = content.substring(0, 60).replace(/\n/g, ' ') + '...';
+            document.getElementById('filePreview').textContent = preview;
+            
+            this.log(`✅ Файл загружен: ${fileType.toUpperCase()}, ${content.length} символов`, 'success');
+            this.log(`📝 Превью: ${preview}`, 'info');
+            
+        } catch (error) {
+            this.log(`❌ Ошибка обработки файла: ${error.message}`, 'error');
+            this.showToast('Ошибка чтения файла: ' + error.message, 'error');
+        }
+    }
+
+    // Извлечение текста из PDF
+    async extractTextFromPDF(file) {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        
+        let fullText = '';
+        const totalPages = pdf.numPages;
+        
+        this.log(`📖 PDF: ${totalPages} страниц`, 'info');
+
+        for (let i = 1; i <= totalPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(' ');
+            fullText += pageText + '\n';
+            
+            if (i % 5 === 0) {
+                this.log(`⏳ Обработано страниц: ${i}/${totalPages}`, 'info');
+            }
+        }
+
+        // Очищаем текст от лишних пробелов
+        fullText = fullText.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n').trim();
+        
+        return fullText;
+    }
+
+    // Извлечение текста из DOCX
+    async extractTextFromDOCX(file) {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        
+        if (result.messages.length > 0) {
+            console.log('Mammoth messages:', result.messages);
+        }
+
+        // Очищаем текст
+        let text = result.value;
+        text = text.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n').trim();
+        
+        return text;
+    }
+
+    clearFile() {
+        this.state.currentFile = null;
+        this.state.fileContent = null;
+        document.getElementById('fileInfo').classList.add('hidden');
+        document.getElementById('fileInput').value = '';
+    }
+
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    renderModels() {
+        const container = document.getElementById('modelList');
+        if (this.state.models.length === 0) {
+            container.innerHTML = '<div class="text-center text-slate-500 py-4">Нет доступных моделей</div>';
+            return;
+        }
+
+        container.innerHTML = this.state.models.map(model => `
+            <div class="model-card p-3 rounded-lg border border-slate-700 bg-slate-800/30 flex items-center gap-3" 
+                 onclick="app.selectModel('${model.id}')" id="model-${model.id}">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center">
+                    <i class="fas fa-robot text-indigo-400"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="font-medium text-sm truncate">${model.id}</p>
+                    <p class="text-xs text-slate-500">Готова к работе</p>
+                </div>
+                <i class="fas fa-check-circle text-indigo-500 opacity-0 check-icon"></i>
+            </div>
+        `).join('');
+    }
+
+    renderMockModels() {
+        this.state.models = [
+            { id: 'local-model', name: 'Local Model' }
+        ];
+        this.renderModels();
+    }
+
+    selectModel(modelId) {
+        this.state.selectedModel = modelId;
+        document.querySelectorAll('.model-card').forEach(card => {
+            card.classList.remove('selected');
+            card.querySelector('.check-icon').classList.add('opacity-0');
+        });
+        const selected = document.getElementById(`model-${modelId}`);
+        if (selected) {
+            selected.classList.add('selected');
+            selected.querySelector('.check-icon').classList.remove('opacity-0');
+        }
+        this.log(`Выбрана модель: ${modelId}`, 'info');
+    }
+
+    createDefaultRubric() {
+        this.state.rubrics = this.state.rubrics.filter(r => !r.id.startsWith('default_'));
+
+        const defaultRubric = {
+            id: 'default_academic',
+            name: 'Стандартная академическая рубрика',
+            criteria: [
+                { name: 'Соответствие теме', weight: 20, maxScore: 10, description: 'Насколько работа соответствует заявленной теме' },
+                { name: 'Оригинальность', weight: 20, maxScore: 10, description: 'Уникальность подхода, отсутствие плагиата' },
+                { name: 'Структура работы', weight: 20, maxScore: 10, description: 'Логичность построения, наличие введения/заключения' },
+                { name: 'Качество содержания', weight: 20, maxScore: 10, description: 'Глубина раскрытия темы, качество аргументации' },
+                { name: 'Оформление и стиль', weight: 20, maxScore: 10, description: 'Соответствие требованиям, грамотность' }
+            ]
+        };
+        this.state.rubrics.push(defaultRubric);
+        this.saveRubrics();
+    }
+
+    loadRubrics() {
+        const select = document.getElementById('rubricSelect');
+
+        if (this.state.rubrics.length === 0) {
+            select.innerHTML = '<option value="">Нет доступных рубрик</option>';
+            return;
+        }
+
+        select.innerHTML = '<option value="">-- Выберите рубрику --</option>' +
+            this.state.rubrics.map(r => `<option value="${r.id}">${r.name} (${r.criteria.length} критериев)</option>`).join('');
+
+        select.onchange = (e) => {
+            this.selectRubric(e.target.value);
+        };
+
+        if (!this.state.selectedRubric && this.state.rubrics.length > 0) {
+            const defaultRubric = this.state.rubrics.find(r => r.id === 'default_academic') || this.state.rubrics[0];
+            select.value = defaultRubric.id;
+            this.selectRubric(defaultRubric.id);
+        }
+    }
+
+    selectRubric(rubricId) {
+        rubricId = String(rubricId);
+        const rubric = this.state.rubrics.find(r => String(r.id) === rubricId);
+
+        if (!rubric) {
+            document.getElementById('rubricPreview').classList.add('hidden');
+            return;
+        }
+
+        this.state.selectedRubric = rubric;
+        this.updateRubricStatus();
+
+        const preview = document.getElementById('rubricPreview');
+        preview.classList.remove('hidden');
+        preview.innerHTML = rubric.criteria.map(c => `
+            <div class="flex items-center justify-between text-sm p-2 rounded bg-slate-800/30 border border-slate-700">
+                <div>
+                    <span class="text-slate-300 font-medium">${c.name}</span>
+                    <p class="text-xs text-slate-500 mt-0.5">${c.description || ''}</p>
+                </div>
+                <span class="text-indigo-400 font-medium">${c.weight}%</span>
+            </div>
+        `).join('');
+    }
+
+    openRubricBuilder() {
+        document.getElementById('rubricModal').classList.remove('hidden');
+        document.getElementById('rubricItems').innerHTML = '';
+        this.addRubricItem();
+    }
+
+    closeRubricBuilder() {
+        document.getElementById('rubricModal').classList.add('hidden');
+    }
+
+    addRubricItem() {
+        const container = document.getElementById('rubricItems');
+        const div = document.createElement('div');
+        div.className = 'rubric-item flex gap-3 items-start p-3 rounded-lg bg-slate-800/50 border border-slate-700';
+        div.innerHTML = `
+            <div class="flex-1 space-y-2">
+                <input type="text" placeholder="Название критерия" class="w-full bg-transparent border-none focus:outline-none text-sm font-medium" data-name>
+                <input type="text" placeholder="Описание" class="w-full bg-transparent border-none focus:outline-none text-xs text-slate-400" data-desc>
+            </div>
+            <div class="flex gap-2">
+                <input type="number" placeholder="Вес %" class="w-16 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm" data-weight value="20">
+                <input type="number" placeholder="Max" class="w-16 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm" data-max value="10">
+            </div>
+            <button onclick="this.closest('.rubric-item').remove()" class="text-slate-500 hover:text-red-400 pt-1">
+                <i class="fas fa-trash"></i>
+            </button>
+        `;
+        container.appendChild(div);
+    }
+
+    saveRubric() {
+        const name = document.getElementById('rubricName').value.trim();
+        if (!name) {
+            this.showToast('Введите название рубрики', 'error');
+            return;
+        }
+
+        const items = [];
+        document.querySelectorAll('#rubricItems > div').forEach(div => {
+            const name = div.querySelector('[data-name]').value.trim();
+            const desc = div.querySelector('[data-desc]').value.trim();
+            const weight = parseInt(div.querySelector('[data-weight]').value) || 0;
+            const maxScore = parseInt(div.querySelector('[data-max]').value) || 10;
+            if (name) items.push({ name, description: desc, weight, maxScore });
+        });
+
+        if (items.length === 0) {
+            this.showToast('Добавьте хотя бы один критерий', 'error');
+            return;
+        }
+
+        const totalWeight = items.reduce((sum, item) => sum + item.weight, 0);
+        if (totalWeight !== 100) {
+            this.showToast(`Сумма весов должна быть 100%, сейчас ${totalWeight}%`, 'error');
+            return;
+        }
+
+        const rubric = {
+            id: 'rubric_' + Date.now(),
+            name,
+            criteria: items
+        };
+
+        this.state.rubrics.push(rubric);
+        this.saveRubrics();
+        this.loadRubrics();
+        this.closeRubricBuilder();
+        this.showToast('Рубрика сохранена', 'success');
+        document.getElementById('rubricName').value = '';
+    }
+
+    saveRubrics() {
+        localStorage.setItem('rubrics', JSON.stringify(this.state.rubrics));
+    }
+
+    // ==================== ОСНОВНАЯ ЛОГИКА АНАЛИЗА ====================
+
+    async startAnalysis() {
+        if (!this.state.fileContent) {
+            this.showToast('Загрузите файл для проверки', 'error');
+            return;
+        }
+        if (!this.state.selectedModel) {
+            this.showToast('Выберите модель ИИ', 'error');
+            return;
+        }
+        if (!this.state.selectedRubric) {
+            this.showToast('Выберите рубрику оценки', 'error');
+            return;
+        }
+
+        this.state.isAnalyzing = true;
+        this.state.expertResults = {};
+        this.state.evaluationPlan = null;
+        
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('progressPanel').classList.remove('hidden');
+
+        this.updateProgress(0);
+        this.renderExpertSteps();
+
+        try {
+            this.log('📖 Начинаем двухэтапную проверку...', 'info');
+            this.log(`📄 Размер текста: ${this.state.fileContent.length} символов`, 'info');
+
+            // ЭТАП 1: Планировщик анализирует рубрику и формирует промты
+            this.setExpertStatus('planner', 'running');
+            this.log('🧠 Этап 1: Планировщик формирует задания для экспертов...', 'info');
+            
+            const plan = await this.runPlanner();
+            this.state.evaluationPlan = plan;
+            
+            this.setExpertStatus('planner', 'completed', {score: 1, maxScore: 1});
+            this.log('✅ Планировщик создал задания для критериев', 'success');
+            this.updateProgress(15);
+
+            // ЭТАП 2: Последовательная оценка каждого критерия
+            const criteria = this.state.selectedRubric.criteria;
+            const totalCriteria = criteria.length;
+            
+            for (let i = 0; i < totalCriteria; i++) {
+                const criterion = criteria[i];
+                const progress = 15 + ((i + 1) / totalCriteria) * 70; // 15% до 85%
+                
+                this.log(`🔍 Оцениваем: ${criterion.name}...`, 'info');
+                
+                // Находим соответствующий промт из плана
+                const planItem = plan.find(p => 
+                    p.criterion.toLowerCase().includes(criterion.name.toLowerCase()) ||
+                    criterion.name.toLowerCase().includes(p.criterion.toLowerCase())
+                );
+                
+                if (!planItem) {
+                    this.log(`⚠️ Нет промта для ${criterion.name}, используем стандартный`, 'warning');
+                }
+                
+                try {
+                    const result = await this.evaluateCriterion(criterion, planItem);
+                    this.state.expertResults[criterion.name] = result;
+                    this.log(`✅ ${criterion.name}: ${result.score}/${criterion.maxScore} баллов`, 'success');
+                } catch (error) {
+                    this.log(`❌ Ошибка оценки ${criterion.name}: ${error.message}`, 'error');
+                    this.state.expertResults[criterion.name] = {
+                        score: Math.floor(criterion.maxScore * 0.5),
+                        maxScore: criterion.maxScore,
+                        justification: 'Ошибка оценки: ' + error.message,
+                        recommendations: 'Проверьте вручную',
+                        strengths: [],
+                        weaknesses: []
+                    };
+                }
+                
+                this.updateProgress(progress);
+            }
+
+            // Финализация
+            this.updateProgress(90);
+            this.log('📝 Формирование итогового отчета...', 'info');
+
+            const finalResult = this.calculateFinalScore();
+            this.state.currentResult = finalResult;
+
+            this.updateProgress(100);
+            this.log(`🎉 Анализ завершен! Итоговая оценка: ${finalResult.finalScore} из 100`, 'success');
+
+            setTimeout(() => this.showResults(), 500);
+
+        } catch (error) {
+            this.log(`❌ Критическая ошибка: ${error.message}`, 'error');
+            this.showToast('Ошибка при проверке: ' + error.message, 'error');
+        } finally {
+            this.state.isAnalyzing = false;
+            document.getElementById('startBtn').disabled = false;
+        }
+    }
+
+    // ЭТАП 1: Планировщик
+    async runPlanner() {
+        const rubric = this.state.selectedRubric;
+        const content = this.state.fileContent;
+        
+        // Берем первые 4000 символов для анализа планировщиком
+        const contentPreview = content.substring(0, 4000);
+        
+        const prompt = `Ты - Планировщик академической проверки. Твоя задача - проанализировать текст работы и рубрику, и создать детальные промты для оценки каждого критерия.
+
+РУБРИКА:
+${rubric.criteria.map(c => `- ${c.name} (макс ${c.maxScore} балл., вес ${c.weight}%): ${c.description}`).join('\n')}
+
+ТЕКСТ РАБОТЫ (начало):
+${contentPreview}
+
+ЗАДАЧА:
+Создай JSON массив, где для каждого критерия рубрики будет детальный промт для эксперта. Промт должен включать конкретные вопросы и указания, на что обращать внимание при оценке.
+
+ФОРМАТ ОТВЕТА (строго JSON):
+[
+  {
+    "criterion": "Название критерия",
+    "prompt": "Детальный промт для эксперта. Включи: 1) Что проверять, 2) На что обращать внимание, 3) Какие ошибки искать",
+    "maxScore": ${rubric.criteria[0]?.maxScore || 10}
+  },
+  ...
+]`;
+
+        const response = await this.callLLM(prompt, 3000);
+        
+        // Парсим план
+        try {
+            const plan = this.extractJSON(response);
+            if (Array.isArray(plan) && plan.length > 0) {
+                this.log(`📋 Планировщик создал ${plan.length} заданий`, 'info');
+                return plan;
+            } else {
+                throw new Error('Планировщик вернул некорректную структуру');
+            }
+        } catch (e) {
+            this.log('⚠️ Не удалось распарсить план, используем стандартные промты', 'warning');
+            // Возвращаем стандартные промты на основе рубрики
+            return rubric.criteria.map(c => ({
+                criterion: c.name,
+                prompt: `Оцени критерий "${c.name}" (${c.description}). Проверь текст работы и выстави оценку от 0 до ${c.maxScore}.`,
+                maxScore: c.maxScore
+            }));
+        }
+    }
+
+    // ЭТАП 2: Оценка конкретного критерия
+    async evaluateCriterion(criterion, planItem) {
+        const content = this.state.fileContent;
+        const maxLen = 6000; // Отправляем больше текста для конкретной оценки
+        const contentPreview = content.substring(0, maxLen);
+        
+        // Используем промт от планировщика или стандартный
+        const expertPrompt = planItem ? planItem.prompt : `Оцени критерий "${criterion.name}"`;
+        
+        const prompt = `Ты - Эксперт по оценке академических работ. Оцени работу строго по указанному критерию.
+
+КРИТЕРИЙ: ${criterion.name}
+ОПИСАНИЕ: ${criterion.description || ''}
+МАКСИМАЛЬНЫЙ БАЛЛ: ${criterion.maxScore}
+
+ЗАДАНИЕ ДЛЯ ЭКСПЕРТА:
+${expertPrompt}
+
+ТЕКСТ РАБОТЫ ДЛЯ АНАЛИЗА:
+---
+${contentPreview}
+---
+
+ВЕРНИ РЕЗУЛЬТАТ СТРОГО В JSON:
+{
+  "score": число от 0 до ${criterion.maxScore},
+  "justification": "развернутое обоснование оценки на русском языке",
+  "recommendations": "конкретные рекомендации по улучшению",
+  "strengths": ["сильная сторона 1", "сильная сторона 2"],
+  "weaknesses": ["слабая сторона 1", "слабая сторона 2"]
+}`;
+
+        const response = await this.callLLM(prompt, 2000);
+        
+        // Парсим результат
+        const result = this.parseExpertResponse(response, criterion);
+        return result;
+    }
+
+    // Универсальный вызов LLM
+    async callLLM(prompt, maxTokens = 2000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+        try {
+            const response = await fetch(`${this.config.lmStudioUrl}/v1/chat/completions`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: this.state.selectedModel,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'Ты - академический эксперт. Отвечай только в формате JSON без markdown, без текста до или после JSON.'
+                        },
+                        { role: 'user', content: prompt }
+                    ],
+                    temperature: 0.3,
+                    max_tokens: maxTokens
+                }),
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            return data.choices[0].message.content;
+            
+        } catch (error) {
+            clearTimeout(timeoutId);
+            throw error;
+        }
+    }
+
+    // Извлечение JSON из ответа
+    extractJSON(text) {
+        // Пробуем найти JSON массив или объект
+        const patterns = [
+            /\[[\s\S]*\]/, // Массив
+            /\{[\s\S]*\}/  // Объект
+        ];
+        
+        for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match) {
+                try {
+                    return JSON.parse(match[0]);
+                } catch (e) {
+                    continue;
+                }
+            }
+        }
+        
+        throw new Error('JSON не найден');
+    }
+
+    parseExpertResponse(rawResponse, criterion) {
+        // Пробуем извлечь JSON
+        try {
+            const data = this.extractJSON(rawResponse);
+            
+            let score = parseFloat(data.score);
+            if (isNaN(score)) score = 0;
+            if (score < 0) score = 0;
+            if (score > criterion.maxScore) score = criterion.maxScore;
+            
+            return {
+                score: score,
+                maxScore: criterion.maxScore,
+                justification: data.justification || data.comment || 'Нет обоснования',
+                recommendations: data.recommendations || data.recommendation || 'Нет рекомендаций',
+                strengths: Array.isArray(data.strengths) ? data.strengths : [],
+                weaknesses: Array.isArray(data.weaknesses) ? data.weaknesses : (Array.isArray(data.weakness) ? data.weakness : [])
+            };
+        } catch (e) {
+            // Fallback: ищем числа в тексте
+            const scoreMatch = rawResponse.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+)/);
+            if (scoreMatch) {
+                const score = parseFloat(scoreMatch[1]);
+                return {
+                    score: Math.min(score, criterion.maxScore),
+                    maxScore: criterion.maxScore,
+                    justification: 'Оценка извлечена из текста: ' + rawResponse.substring(0, 200),
+                    recommendations: 'См. полный ответ модели',
+                    strengths: [],
+                    weaknesses: []
+                };
+            }
+            
+            return {
+                score: Math.floor(criterion.maxScore * 0.5),
+                maxScore: criterion.maxScore,
+                justification: 'Не удалось распарсить ответ модели',
+                recommendations: 'Проверьте вручную',
+                strengths: [],
+                weaknesses: []
+            };
+        }
+    }
+
+    calculateFinalScore() {
+        const rubric = this.state.selectedRubric;
+        const results = this.state.expertResults;
+
+        let totalWeightedScore = 0;
+        let totalWeight = 0;
+        const criterionResults = [];
+
+        rubric.criteria.forEach(criterion => {
+            const expertResult = results[criterion.name] || {
+                score: 0,
+                maxScore: criterion.maxScore,
+                justification: 'Не оценено',
+                recommendations: '-',
+                strengths: [],
+                weaknesses: []
+            };
+
+            const normalizedScore = (expertResult.score / criterion.maxScore) * 100;
+            const weightedScore = normalizedScore * (criterion.weight / 100);
+
+            totalWeightedScore += weightedScore;
+            totalWeight += criterion.weight;
+
+            criterionResults.push({
+                criterion: criterion.name,
+                weight: criterion.weight,
+                score: expertResult.score,
+                maxScore: criterion.maxScore,
+                normalizedScore: Math.round(normalizedScore * 10) / 10,
+                weightedScore: Math.round(weightedScore * 10) / 10,
+                justification: expertResult.justification,
+                recommendations: expertResult.recommendations,
+                strengths: expertResult.strengths,
+                weaknesses: expertResult.weaknesses
+            });
+        });
+
+        const finalScore = totalWeight > 0 ? Math.round((totalWeightedScore / totalWeight) * 100) / 1 : 0;
+
+        let grade, gradeDescription;
+        if (finalScore >= 90) { grade = 'A'; gradeDescription = 'Отлично'; }
+        else if (finalScore >= 80) { grade = 'B'; gradeDescription = 'Хорошо'; }
+        else if (finalScore >= 70) { grade = 'C'; gradeDescription = 'Удовлетворительно'; }
+        else if (finalScore >= 60) { grade = 'D'; gradeDescription = 'Достаточно'; }
+        else if (finalScore >= 50) { grade = 'E'; gradeDescription = 'Слабо'; }
+        else { grade = 'F'; gradeDescription = 'Неудовлетворительно'; }
+
+        return {
+            finalScore: Math.round(finalScore),
+            maxScore: 100,
+            percentage: Math.round(finalScore),
+            grade: grade,
+            gradeDescription: gradeDescription,
+            fileName: this.state.currentFile.name,
+            timestamp: new Date().toISOString(),
+            criteria: criterionResults,
+            rubricName: rubric.name,
+            modelUsed: this.state.selectedModel
+        };
+    }
+
+    renderExpertSteps() {
+        const container = document.getElementById('expertSteps');
+        const criteria = this.state.selectedRubric ? this.state.selectedRubric.criteria : [];
+        
+        let html = `
+            <div id="expert-planner" class="flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 border border-slate-700 opacity-50 transition-all">
+                <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
+                    <i class="fas fa-sitemap text-blue-400 text-sm"></i>
+                </div>
+                <div class="flex-1">
+                    <p class="font-medium text-sm">Планировщик</p>
+                    <p class="text-xs text-slate-500 expert-status">Ожидание...</p>
+                </div>
+                <i class="fas fa-circle-notch fa-spin text-indigo-500 hidden expert-loading"></i>
+                <i class="fas fa-check-circle text-green-500 hidden expert-done"></i>
+            </div>
+        `;
+        
+        criteria.forEach((c, i) => {
+            html += `
+                <div id="expert-${i}" class="flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 border border-slate-700 opacity-50 transition-all">
+                    <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
+                        <i class="fas fa-check-circle text-indigo-400 text-sm"></i>
+                    </div>
+                    <div class="flex-1">
+                        <p class="font-medium text-sm">${c.name}</p>
+                        <p class="text-xs text-slate-500 expert-status">Ожидание...</p>
+                        <p class="text-xs text-indigo-400 expert-score hidden"></p>
+                    </div>
+                    <i class="fas fa-circle-notch fa-spin text-indigo-500 hidden expert-loading"></i>
+                    <i class="fas fa-check-circle text-green-500 hidden expert-done"></i>
+                </div>
+            `;
+        });
+        
+        container.innerHTML = html;
+    }
+
+    setExpertStatus(id, status, result = null) {
+        const element = document.getElementById(id === 'planner' ? 'expert-planner' : `expert-${id}`);
+        if (!element) return;
+
+        element.classList.remove('opacity-50', 'border-indigo-500/50', 'bg-indigo-500/10', 'border-green-500/50', 'bg-green-500/10');
+        element.querySelector('.expert-loading')?.classList.add('hidden');
+        element.querySelector('.expert-done')?.classList.add('hidden');
+
+        if (status === 'running') {
+            element.classList.add('border-indigo-500/50', 'bg-indigo-500/10');
+            element.querySelector('.expert-status').textContent = 'Анализирует...';
+            element.querySelector('.expert-loading')?.classList.remove('hidden');
+        } else if (status === 'completed') {
+            element.classList.add('border-green-500/50', 'bg-green-500/10');
+            element.querySelector('.expert-status').textContent = 'Завершено';
+            element.querySelector('.expert-status').classList.add('text-green-400');
+            element.querySelector('.expert-done')?.classList.remove('hidden');
+
+            if (result && result.score !== undefined) {
+                const scoreEl = element.querySelector('.expert-score');
+                if (scoreEl) {
+                    scoreEl.textContent = `${result.score}/${result.maxScore} баллов`;
+                    scoreEl.classList.remove('hidden');
+                }
+            }
+        }
+    }
+
+    updateProgress(percent) {
+        document.getElementById('progressBar').style.width = percent + '%';
+        document.getElementById('progressPercent').textContent = Math.round(percent) + '%';
+    }
+
+    async readFileContent(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = (e) => reject(new Error('Ошибка чтения файла'));
+            reader.readAsText(file);
+        });
+    }
+
+    showResults() {
+        const result = this.state.currentResult;
+        if (!result) return;
+
+        document.getElementById('finalGrade').textContent = `${result.finalScore}/100`;
+        document.getElementById('gradeComment').textContent = 
+            `${result.gradeDescription} (${result.grade}) - ${result.rubricName}`;
+
+        const criteriaContainer = document.getElementById('criteriaScores');
+        criteriaContainer.innerHTML = result.criteria.map(c => `
+            <div class="criterion-score p-4 rounded-lg bg-slate-800/30 border border-slate-700">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-3">
+                        <span class="font-medium text-slate-200">${c.criterion}</span>
+                        <span class="text-xs text-slate-500">(вес ${c.weight}%)</span>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-xl font-bold text-indigo-400">${c.score}</span>
+                        <span class="text-sm text-slate-500">/${c.maxScore}</span>
+                    </div>
+                </div>
+                <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden mb-3">
+                    <div class="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-1000" 
+                         style="width: ${(c.score / c.maxScore * 100)}%"></div>
+                </div>
+                <p class="text-sm text-slate-400 mb-2">${c.justification}</p>
+                ${c.strengths.length > 0 ? `
+                    <div class="text-xs text-green-400 mb-1">
+                        <i class="fas fa-plus-circle mr-1"></i>${c.strengths.join(', ')}
+                    </div>
+                ` : ''}
+                ${c.weaknesses.length > 0 ? `
+                    <div class="text-xs text-orange-400">
+                        <i class="fas fa-minus-circle mr-1"></i>${c.weaknesses.join(', ')}
+                    </div>
+                ` : ''}
+            </div>
+        `).join('');
+
+        const feedbackHtml = result.criteria.map(c => `
+            ### ${c.criterion}: ${c.score}/${c.maxScore}
+            **Обоснование:** ${c.justification}
+
+            **Рекомендации:** ${c.recommendations}
+
+            ${c.strengths.length > 0 ? `**Сильные стороны:** ${c.strengths.join(', ')}` : ''}
+            ${c.weaknesses.length > 0 ? `**Области для улучшения:** ${c.weaknesses.join(', ')}` : ''}
+        `).join('\n\n');
+
+        document.getElementById('detailedFeedback').innerHTML = marked.parse(feedbackHtml);
+
+        const ctx = document.getElementById('gradeChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Набрано', 'Осталось'],
+                datasets: [{
+                    data: [result.finalScore, 100 - result.finalScore],
+                    backgroundColor: ['#6366f1', '#1e293b'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                cutout: '70%'
+            }
+        });
+
+        document.getElementById('resultsModal').classList.remove('hidden');
+    }
+
+    closeResults() {
+        document.getElementById('resultsModal').classList.add('hidden');
+    }
+
+    downloadReport() {
+        const r = this.state.currentResult;
+        if (!r) return;
+
+        const content = `# Отчет о проверке работы
+
+**Файл:** ${r.fileName}  
+**Дата:** ${new Date(r.timestamp).toLocaleString()}  
+**Модель:** ${r.modelUsed}  
+**Рубрика:** ${r.rubricName}
+
+---
+
+## Итоговая оценка: ${r.finalScore}/100
+
+**Буквенная оценка:** ${r.grade} (${r.gradeDescription})
+
+---
+
+## Оценки по критериям
+
+${r.criteria.map(c => `
+### ${c.criterion} (вес ${c.weight}%)
+- **Балл:** ${c.score}/${c.maxScore}
+- **Обоснование:** ${c.justification}
+- **Рекомендации:** ${c.recommendations}
+${c.strengths.length > 0 ? `- **Сильные стороны:** ${c.strengths.join(', ')}` : ''}
+${c.weaknesses.length > 0 ? `- **Области для улучшения:** ${c.weaknesses.join(', ')}` : ''}
+`).join('\n')}
+
+---
+
+*Сгенерировано Smart Grader AI*
+`;
+
+        const blob = new Blob([content], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `report_${Date.now()}.md`;
+        a.click();
+
+        this.showToast('Отчет скачан', 'success');
+    }
+
+    saveToHistory() {
+        if (!this.state.currentResult) return;
+
+        this.state.history.unshift(this.state.currentResult);
+        if (this.state.history.length > 20) this.state.history.pop();
+
+        localStorage.setItem('history', JSON.stringify(this.state.history));
+        this.loadHistory();
+        this.showToast('Сохранено в историю', 'success');
+    }
+
+    loadHistory() {
+        const container = document.getElementById('historyList');
+        if (this.state.history.length === 0) {
+            container.innerHTML = '<div class="text-center text-slate-500 py-8 text-sm">История пуста</div>';
+            return;
+        }
+
+        container.innerHTML = this.state.history.map((item, idx) => `
+            <div class="p-3 rounded-lg bg-slate-800/30 border border-slate-700 hover:border-indigo-500/50 cursor-pointer transition-colors"
+                 onclick="app.loadHistoryItem(${idx})">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="font-medium text-sm truncate">${item.fileName}</span>
+                    <span class="text-indigo-400 font-bold">${item.finalScore}</span>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-500">
+                    <span>${new Date(item.timestamp).toLocaleDateString()}</span>
+                    <span>${item.grade}</span>
+                </div>
+            </div>
+        `).join('');
+
+        document.getElementById('statTotal').textContent = this.state.history.length;
+        const avg = this.state.history.reduce((a, b) => a + b.finalScore, 0) / this.state.history.length;
+        document.getElementById('statAvg').textContent = avg ? avg.toFixed(1) : '-';
+    }
+
+    loadHistoryItem(index) {
+        this.state.currentResult = this.state.history[index];
+        this.showResults();
+    }
+
+    openSettings() {
+        document.getElementById('lmStudioUrl').value = this.config.lmStudioUrl;
+        document.getElementById('temperature').value = this.config.temperature;
+        document.getElementById('tempValue').textContent = this.config.temperature;
+        document.getElementById('maxTokens').value = this.config.maxTokens;
+        document.getElementById('settingsModal').classList.remove('hidden');
+    }
+
+    closeSettings() {
+        document.getElementById('settingsModal').classList.add('hidden');
+    }
+
+    saveSettings() {
+        this.config.lmStudioUrl = document.getElementById('lmStudioUrl').value.trim();
+        this.config.temperature = parseFloat(document.getElementById('temperature').value);
+        this.config.maxTokens = parseInt(document.getElementById('maxTokens').value);
+
+        localStorage.setItem('lmStudioUrl', this.config.lmStudioUrl);
+        localStorage.setItem('temperature', this.config.temperature);
+        localStorage.setItem('maxTokens', this.config.maxTokens);
+
+        this.closeSettings();
+        this.checkConnection();
+        this.showToast('Настройки сохранены', 'success');
+    }
+
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    log(message, type = 'info') {
+        const console = document.getElementById('logConsole');
+        const time = new Date().toLocaleTimeString();
+        const colors = {
+            info: 'text-slate-400',
+            success: 'text-green-400',
+            error: 'text-red-400',
+            warning: 'text-yellow-400'
+        };
+
+        const line = document.createElement('div');
+        line.className = colors[type] || colors.info;
+        line.innerHTML = `<span class="opacity-50">[${time}]</span> ${message}`;
+        console.appendChild(line);
+        console.scrollTop = console.scrollHeight;
+    }
+
+    showToast(message, type = 'info') {
+        const container = document.getElementById('toastContainer');
+        const toast = document.createElement('div');
+
+        const colors = {
+            success: 'border-green-500/50 bg-green-500/10 text-green-400',
+            error: 'border-red-500/50 bg-red-500/10 text-red-400',
+            info: 'border-indigo-500/50 bg-indigo-500/10 text-indigo-400',
+            warning: 'border-yellow-500/50 bg-yellow-500/10 text-yellow-400'
+        };
+
+        const icons = {
+            success: 'fa-check-circle',
+            error: 'fa-exclamation-circle',
+            info: 'fa-info-circle',
+            warning: 'fa-exclamation-triangle'
+        };
+
+        toast.className = `toast glass border ${colors[type]} px-6 py-3 rounded-lg shadow-lg flex items-center gap-3`;
+        toast.innerHTML = `
+            <i class="fas ${icons[type]}"></i>
+            <span class="font-medium">${message}</span>
+        `;
+
+        container.appendChild(toast);
+        setTimeout(() => toast.classList.add('show'), 10);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
+    }
+}
+
+// Initialize
+const app = new SmartGrader();
+
+    </script>
+</body>
+</html>

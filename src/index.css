@@ -1,0 +1,169 @@
+html, body, #root {
+  overflow: hidden;
+  height: 100%;
+}
+
+* {
+  overflow-anchor: none;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Glass card */
+@layer components {
+  .glass-card {
+    @apply bg-white/90 border border-slate-200/80 rounded-2xl shadow-sm;
+    backdrop-filter: blur(8px);
+  }
+
+  .glass-panel {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  }
+
+  .drop-zone {
+    @apply border-2 border-dashed border-slate-200 rounded-xl p-6 text-center cursor-pointer transition-all duration-200 bg-slate-50;
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    @apply border-blue-400 bg-blue-50/50;
+    transform: scale(1.01);
+  }
+
+  .planner-tile {
+    @apply border border-slate-200 bg-white rounded-xl p-4 transition-all duration-300 shadow-sm;
+  }
+  .planner-tile.active {
+    @apply border-blue-400 bg-blue-50 shadow-blue-100 shadow-md;
+  }
+  .planner-tile.completed {
+    @apply border-emerald-400 bg-emerald-50;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm;
+  }
+  .btn-secondary {
+    @apply px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg font-medium transition-colors;
+  }
+}
+
+/* Log console */
+.log-entry {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8125rem;
+  padding: 3px 0;
+  border-bottom: 1px solid #f1f5f9;
+  animation: fadeIn 0.2s ease-out;
+}
+.log-entry:last-child { border-bottom: none; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-in { animation: slideIn 0.3s ease-out; }
+
+/* Progress gradient bar */
+.progress-gradient {
+  background: linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6);
+  background-size: 200% 100%;
+  animation: gradientShift 2s ease infinite;
+}
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Planner / Summarizer step text cycling */
+@keyframes stepFade {
+  0%   { opacity: 0; transform: translateY(4px); }
+  15%  { opacity: 1; transform: translateY(0); }
+  80%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-4px); }
+}
+.step-cycle { animation: stepFade 2.4s ease-in-out infinite; }
+
+/* SVG pulse ring */
+@keyframes svgPulse {
+  0%, 100% { r: 18; opacity: 0.2; }
+  50%       { r: 24; opacity: 0; }
+}
+.svg-pulse { animation: svgPulse 1.8s ease-in-out infinite; }
+
+/* Orbit spin */
+@keyframes orbitSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.orbit-spin { animation: orbitSpin 3s linear infinite; transform-origin: 40px 40px; }
+.orbit-spin-rev { animation: orbitSpin 4.5s linear infinite reverse; transform-origin: 40px 40px; }
+
+/* Bar fill */
+@keyframes barFill {
+  0%   { height: 4px; }
+  100% { height: var(--bar-h); }
+}
+
+/* Dash flow */
+@keyframes dashFlow {
+  to { stroke-dashoffset: -20; }
+}
+.dash-flow { animation: dashFlow 1.2s linear infinite; }
+
+/* Node blink */
+@keyframes nodeBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+.node-blink-1 { animation: nodeBlink 1.4s ease-in-out infinite; }
+.node-blink-2 { animation: nodeBlink 1.4s ease-in-out 0.35s infinite; }
+.node-blink-3 { animation: nodeBlink 1.4s ease-in-out 0.7s infinite; }
+.node-blink-4 { animation: nodeBlink 1.4s ease-in-out 1.05s infinite; }
+
+/* Score counter tick */
+@keyframes scoreTick {
+  from { opacity: 0; transform: translateY(6px) scale(0.8); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.score-tick { animation: scoreTick 0.4s ease-out forwards; }
+
+/* Indeterminate progress bar slide */
+@keyframes progressSlide {
+  0%   { transform: translateX(-150%); }
+  100% { transform: translateX(400%); }
+}
+
+/* Tutorial modal animations */
+@keyframes tutorialSlideRight {
+  from { opacity: 0; transform: translateX(28px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes tutorialSlideLeft {
+  from { opacity: 0; transform: translateX(-28px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes tutorialIconBounce {
+  0%   { transform: scale(0.7) rotate(-8deg); opacity: 0; }
+  60%  { transform: scale(1.12) rotate(3deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+.tutorial-step-right { animation: tutorialSlideRight 0.28s ease-out; }
+.tutorial-step-left  { animation: tutorialSlideLeft  0.28s ease-out; }
+.tutorial-icon-bounce { animation: tutorialIconBounce 0.38s ease-out; }

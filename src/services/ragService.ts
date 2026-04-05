@@ -249,18 +249,56 @@ function cosineSimilarity(v1: Record<string, number>, v2: Record<string, number>
 
 // ── Work type detection ───────────────────────────────────────────────────────
 
-function detectWorkType(fileName: string, rubricName: string, content: string): string {
+interface WorkTypePattern {
+  type: string
+  patterns: RegExp[]
+  weight: number // confidence boost for stronger signals
+}
+
+const WORK_TYPE_PATTERNS: WorkTypePattern[] = [
+  { type: 'Курсовая работа', patterns: [/курсов/, /курсовая/i], weight: 0.3 },
+  { type: 'Дипломная работа', patterns: [/диплом/i, /выпускн/i, /вкр/i, /final\s*qualifying/i], weight: 0.35 },
+  { type: 'Реферат', patterns: [/реферат/i, /review\s*paper/i, /survey/i], weight: 0.25 },
+  { type: 'Лабораторная работа', patterns: [/лаборатор/i, /лаб\.?\s*раб/i, /лаб\.?\s*работ/i, /lab\s*work/i], weight: 0.3 },
+  { type: 'Практическая работа', patterns: [/практическ/i, /practice/i], weight: 0.25 },
+  { type: 'Контрольная работа', patterns: [/контрольн/i, /test\s*work/i], weight: 0.25 },
+  { type: 'Эссе', patterns: [/эссе/i, /essay/i], weight: 0.3 },
+  { type: 'Отчёт', patterns: [/отчёт/i, /отчет/i, /report/i], weight: 0.25 },
+  { type: 'Доклад', patterns: [/доклад/i, /presentation/i, /speech/i], weight: 0.2 },
+  { type: 'Диссертация', patterns: [/диссертац/i, /thesis/i, /dissertation/i], weight: 0.4 },
+  { type: 'Статья', patterns: [/стать/i, /article/i, /publication/i, /журнал/i], weight: 0.2 },
+]
+
+/**
+ * Detects work type from filename, rubric name and content.
+ * Returns type and confidence (0–1).
+ */
+function detectWorkType(fileName: string, rubricName: string, content: string): { workType: string; confidence: number } {
   const combined = `${fileName} ${rubricName} ${content.substring(0, 500)}`.toLowerCase()
-  if (/курсов|курсовая/.test(combined)) return 'Курсовая работа'
-  if (/диплом|выпускн/.test(combined)) return 'Дипломная работа'
-  if (/реферат/.test(combined)) return 'Реферат'
-  if (/лаборатор|лаб\.?\s*раб/.test(combined)) return 'Лабораторная работа'
-  if (/практическ/.test(combined)) return 'Практическая работа'
-  if (/контрольн/.test(combined)) return 'Контрольная работа'
-  if (/эссе/.test(combined)) return 'Эссе'
-  if (/отчёт|отчет/.test(combined)) return 'Отчёт'
-  if (/доклад/.test(combined)) return 'Доклад'
-  return 'Учебная работа'
+
+  let bestType = 'Учебная работа'
+  let bestScore = 0
+
+  for (const { type, patterns, weight } of WORK_TYPE_PATTERNS) {
+    for (const pat of patterns) {
+      const m = combined.match(pat)
+      if (m) {
+        // Confidence based on match length + pattern weight
+        const score = Math.min(0.95, weight + m[0].length * 0.03)
+        if (score > bestScore) {
+          bestType = type
+          bestScore = score
+        }
+      }
+    }
+  }
+
+  return { workType: bestType, confidence: bestScore }
+}
+
+/** Simple string return for backward compat */
+function detectWorkTypeSimple(fileName: string, rubricName: string, content: string): string {
+  return detectWorkType(fileName, rubricName, content).workType
 }
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
@@ -300,7 +338,7 @@ export function addToKnowledgeBase(result: AnalysisResult, content: string): voi
     grade: result.grade,
     finalScore: result.finalScore,
     timestamp: result.timestamp,
-    workType: detectWorkType(result.fileName, result.rubricName, content),
+    workType: detectWorkType(result.fileName, result.rubricName, content).workType,
     contentSummary: content.substring(0, 1500),
     termVector: buildTermVector(content),
     criteriaResults: result.criteria.map((c) => ({

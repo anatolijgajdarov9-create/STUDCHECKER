@@ -50,9 +50,10 @@ export default function FileUpload() {
     for (const file of arr) {
       addLog(`Загрузка: ${file.name} (${formatFileSize(file.size)})`, 'info')
       try {
-        const content = await extractText(file)
+        const result = await extractText(file)
+        const content = result.content
         loaded.push({ name: file.name, content, file })
-        addLog(`Загружен: ${file.name} — ${content.length} символов`, 'success')
+        addLog(`Загружен: ${file.name} — ${content.length} символов, ${result.stats.wordCount} слов, ${result.stats.pageCount ?? '—'} стр.`, 'success')
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e)
         addLog(`Ошибка загрузки ${file.name}: ${msg}`, 'error')
@@ -133,7 +134,7 @@ export default function FileUpload() {
         <div className="mt-3 space-y-1.5">
           {fileQueue.map((f, i) => {
             const ext = getFileExt(f.name)
-            const iconClass = FILE_ICONS[ext] ?? 'fa-file text-slate-400'
+            const iconClass = ext ? (FILE_ICONS[ext] ?? 'fa-file text-slate-400') : 'fa-file text-slate-400'
             return (
               <div key={f.name} className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg border border-blue-100">
                 <i className={`fa-solid ${iconClass} text-sm shrink-0`} />

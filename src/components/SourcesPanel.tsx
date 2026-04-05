@@ -21,9 +21,9 @@ export default function SourcesPanel() {
     for (const file of arr) {
       addLog(`Источник: загрузка ${file.name} (${formatFileSize(file.size)})`, 'info')
       try {
-        const content = await extractText(file)
-        addSource({ name: file.name, content })
-        addLog(`Источник добавлен: ${file.name} — ${content.length} символов`, 'success')
+        const result = await extractText(file)
+        addSource({ name: file.name, content: result.content })
+        addLog(`Источник добавлен: ${file.name} — ${result.content.length} символов`, 'success')
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e)
         addLog(`Ошибка источника ${file.name}: ${msg}`, 'error')
@@ -104,7 +104,7 @@ export default function SourcesPanel() {
           <div className="mt-3 space-y-1.5">
             {sources.map((src, i) => {
               const ext = getFileExt(src.name)
-              const iconClass = FILE_ICONS[ext] ?? 'fa-file text-slate-400'
+              const iconClass = ext ? (FILE_ICONS[ext] ?? 'fa-file text-slate-400') : 'fa-file text-slate-400'
               const preview = src.content.substring(0, 120).replace(/\n/g, ' ')
               return (
                 <div key={src.name + i} className="p-2.5 bg-violet-50 rounded-lg border border-violet-100">

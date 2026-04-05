@@ -30,11 +30,11 @@ export default function RubricGeneratorPanel() {
     setError('')
     addLog(`Генератор рубрик: загрузка ${f.name} (${formatFileSize(f.size)})`, 'info')
     try {
-      const content = await extractText(f)
-      setFile({ name: f.name, content })
+      const result = await extractText(f)
+      setFile({ name: f.name, content: result.content })
       setGeneratedRubric(null)
       setSaved(false)
-      addLog(`Файл загружен: ${f.name} — ${content.length} символов`, 'success')
+      addLog(`Файл загружен: ${f.name} — ${result.content.length} символов`, 'success')
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       addLog(`Ошибка загрузки: ${msg}`, 'error')

@@ -15,6 +15,44 @@ const TEXT_EXTENSIONS = new Set([
 
 export type SupportedExt = 'pdf' | 'docx' | 'text' | null
 
+export interface ParseResult {
+  content: string
+  stats: DocumentStats
+}
+
+export interface DocumentStats {
+  charCount: number
+  wordCount: number
+  sentenceCount: number
+  paragraphCount: number
+  pageCount?: number
+  avgSentenceLen: number // words per sentence
+  avgParagraphLen: number // words per paragraph
+}
+
+function computeStats(text: string, pageCount?: number): DocumentStats {
+  const charCount = text.length
+  const words = text.split(/\s+/).filter(Boolean)
+  const wordCount = words.length
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 3)
+  const sentenceCount = sentences.length
+  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 10)
+  const paragraphCount = paragraphs.length
+
+  const avgSentenceLen = sentenceCount > 0 ? Math.round(wordCount / sentenceCount * 10) / 10 : 0
+  const avgParagraphLen = paragraphCount > 0 ? Math.round(wordCount / paragraphCount) : 0
+
+  return {
+    charCount,
+    wordCount,
+    sentenceCount,
+    paragraphCount,
+    pageCount,
+    avgSentenceLen,
+    avgParagraphLen
+  }
+}
+
 export function getFileExt(filename: string): SupportedExt {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
   if (ext === 'pdf') return 'pdf'
@@ -23,7 +61,7 @@ export function getFileExt(filename: string): SupportedExt {
   return null
 }
 
-export async function extractText(file: File, maxChars = 15000): Promise<string> {
+export async function extractText(file: File, maxChars = 15000): Promise<ParseResult> {
   const ext = getFileExt(file.name)
 
   if (!ext) {
@@ -31,9 +69,12 @@ export async function extractText(file: File, maxChars = 15000): Promise<string>
   }
 
   let content: string
+  let pageCount: number | undefined
 
   if (ext === 'pdf') {
-    content = await extractFromPDF(file)
+    const result = await extractFromPDF(file)
+    content = result.text
+    pageCount = result.pageCount
   } else if (ext === 'docx') {
     content = await extractFromDOCX(file)
   } else {
@@ -43,19 +84,22 @@ export async function extractText(file: File, maxChars = 15000): Promise<string>
   content = content.trim()
   if (!content) throw new Error('Файл пуст или не содержит текста')
 
-  if (content.length > maxChars) {
+  const truncated = content.length > maxChars
+  if (truncated) {
     content = content.substring(0, maxChars) + '\n\n[... текст обрезан до ' + maxChars + ' символов ...]'
   }
 
-  return content
+  const stats = computeStats(content, pageCount)
+  return { content, stats }
 }
 
-async function extractFromPDF(file: File): Promise<string> {
+async function extractFromPDF(file: File): Promise<{ text: string; pageCount: number }> {
   const arrayBuffer = await file.arrayBuffer()
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
 
   let fullText = ''
-  for (let i = 1; i <= pdf.numPages; i++) {
+  const numPages = pdf.numPages
+  for (let i = 1; i <= numPages; i++) {
     const page = await pdf.getPage(i)
     const textContent = await page.getTextContent()
     const pageText = textContent.items
@@ -64,7 +108,7 @@ async function extractFromPDF(file: File): Promise<string> {
     fullText += pageText + '\n'
   }
 
-  return fullText.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n').trim()
+  return { text: fullText.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n').trim(), pageCount: numPages }
 }
 
 async function extractFromDOCX(file: File): Promise<string> {

@@ -1,0 +1,5 @@
+temp
+aimodels
+build
+dist
+node_modules

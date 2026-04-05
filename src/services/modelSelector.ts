@@ -105,17 +105,61 @@ function formatDisplayName(fileName: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-// Estimate capability 0–100 from file size.
-// Rough guide: 3B ≈ 2 GB, 7B ≈ 4 GB, 13B ≈ 7 GB, 30B ≈ 18 GB, 70B ≈ 40 GB
-function estimateCapability(sizeBytes: number): number {
+// Architecture quality multiplier — known model families perform better at same size.
+// Based on benchmarks (Open LLM Leaderboard, etc.)
+const ARCHITECTURE_MULTIPLIER: Array<{ patterns: RegExp[]; multiplier: number }> = [
+  { patterns: [/qwen2\.5/i, /qwen3/i], multiplier: 1.15 },     // Qwen2.5/3 — excellent across tasks
+  { patterns: [/llama-?3[.\-]/i, /llama3[.\-]/i], multiplier: 1.12 }, // Llama-3 — strong improvement over Llama-2
+  { patterns: [/llama-?3[.\-]*8b/i], multiplier: 1.14 },        // Llama-3 8B specifically
+  { patterns: [/mistral/i, /mixtral/i], multiplier: 1.10 },     // Mistral/Mixtral — efficient
+  { patterns: [/gemma-?2/i], multiplier: 1.08 },                // Gemma 2 — good for size
+  { patterns: [/qwen2/i], multiplier: 1.08 },                   // Qwen2 — solid
+  { patterns: [/phi-?3/i], multiplier: 1.10 },                  // Phi-3 — surprisingly capable
+  { patterns: [/phi-?2/i], multiplier: 0.95 },                  // Phi-2 — weaker
+  { patterns: [/llama-?2/i], multiplier: 0.92 },                // Llama-2 — older
+  { patterns: [/llama/i], multiplier: 0.90 },                   // Llama-1 — oldest
+  { patterns: [/yi/i], multiplier: 1.05 },                      // Yi — competitive
+  { patterns: [/deepseek/i], multiplier: 1.08 },                // DeepSeek — strong coding
+  { patterns: [/minicpm/i], multiplier: 1.02 },                 // MiniCPM — decent
+  { patterns: [/internlm/i], multiplier: 1.02 },                // InternLM — average
+  { patterns: [/baichuan/i], multiplier: 0.95 },                // Baichuan — slightly behind
+  { patterns: [/falcon/i], multiplier: 0.93 },                  // Falcon — older
+  { patterns: [/mpt/i], multiplier: 0.90 },                     // MPT — older
+  { patterns: [/stablelm/i], multiplier: 0.90 },                // StableLM — weaker
+  { patterns: [/vicuna/i], multiplier: 0.88 },                  // Vicuna — fine-tuned Llama-1
+  { patterns: [/openhermes/i, /neuralhermes/i], multiplier: 1.05 }, // OpenHermes — fine-tuned Mistral
+]
+
+/**
+ * Estimate capability 0–100 from file size AND model architecture.
+ *
+ * Uses size as base, then adjusts based on known architecture quality.
+ * Rough guide: 3B ≈ 2 GB, 7B ≈ 4 GB, 13B ≈ 7 GB, 30B ≈ 18 GB, 70B ≈ 40 GB
+ */
+export function estimateCapability(sizeBytes: number, fileName?: string): number {
   const gb = sizeBytes / 1e9
-  if (gb >= 35) return 100
-  if (gb >= 18) return 90
-  if (gb >= 10) return 80
-  if (gb >= 6)  return 70
-  if (gb >= 3)  return 58
-  if (gb >= 1.5) return 46
-  return 35
+
+  // Base capability from size
+  let baseCapability: number
+  if (gb >= 35) baseCapability = 100
+  else if (gb >= 18) baseCapability = 90
+  else if (gb >= 10) baseCapability = 80
+  else if (gb >= 6)  baseCapability = 70
+  else if (gb >= 3)  baseCapability = 58
+  else if (gb >= 1.5) baseCapability = 46
+  else baseCapability = 35
+
+  if (!fileName) return Math.round(baseCapability)
+
+  // Apply architecture multiplier
+  for (const { patterns, multiplier } of ARCHITECTURE_MULTIPLIER) {
+    if (patterns.some(p => p.test(fileName))) {
+      const adjusted = baseCapability * multiplier
+      return Math.round(Math.min(100, adjusted))
+    }
+  }
+
+  return Math.round(baseCapability)
 }
 
 export function parseModels(raw: RawAiModel[]): AiModel[] {
@@ -124,9 +168,9 @@ export function parseModels(raw: RawAiModel[]): AiModel[] {
       ...m,
       sizeLabel: formatSize(m.size),
       displayName: formatDisplayName(m.fileName),
-      capability: estimateCapability(m.size)
+      capability: estimateCapability(m.size, m.fileName)
     }))
-    .sort((a, b) => b.size - a.size) // largest first = most capable first
+    .sort((a, b) => b.capability - a.capability) // most capable first
 }
 
 // ── Content analysis ──────────────────────────────────────────────────────────

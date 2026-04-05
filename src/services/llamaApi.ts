@@ -1,5 +1,15 @@
 import type { Model, PlanItem, CriterionResult, RubricCriterion, Rubric, AiModel, ExecutionPlan } from '../types'
-import { buildModelsDescription } from './modelSelector'
+import { buildModelsDescription, estimateCapability, analyzeContent, type ContentAnalysis } from './modelSelector'
+import {
+  buildCriterionPrompt as buildCriterionPromptTpl,
+  getDomainFewShotExamples,
+  buildSystemPrompt as buildSystemPromptTpl,
+  getOptimalTemperature,
+  getOptimalMaxTokens,
+  detectWorkTypeWithConfidence,
+  buildScoreScale,
+  getWorkTypeReference
+} from './promptTemplates'
 
 export interface LlamaApiConfig {
   url: string
@@ -10,6 +20,10 @@ export interface LlamaApiConfig {
   sources?: Array<{ name: string; content: string }>
   onLog?: (message: string, type?: 'info' | 'success' | 'error' | 'warning') => void
   onRequestLog?: (entry: { criterion: string; prompt: string; response: string; durationMs: number; status: 'ok' | 'error' | 'timeout' }) => void
+  /** Optional: content analysis result for domain-aware prompts */
+  contentAnalysis?: ContentAnalysis
+  /** Optional: detected work type */
+  workType?: string
 }
 
 // ── Circuit Breaker ─────────────────────────────────────────────────────────────
@@ -165,15 +179,9 @@ export function getModelParams(capability: number): ModelParams {
   }
 }
 
+/** @deprecated Use estimateCapability from modelSelector */
 export function getCapabilityFromSize(sizeBytes: number): number {
-  const gb = sizeBytes / 1e9
-  if (gb >= 35) return 100
-  if (gb >= 18) return 90
-  if (gb >= 10) return 80
-  if (gb >= 6)  return 70
-  if (gb >= 3)  return 58
-  if (gb >= 1.5) return 46
-  return 35
+  return estimateCapability(sizeBytes)
 }
 
 export async function fetchModels(baseUrl: string): Promise<Model[]> {
@@ -470,14 +478,14 @@ ${contentPreview.substring(0, 2000)}
       const estimatedSwitches = Number(planData.estimatedSwitches) || steps.filter(s => s.isModelSwitch).length
       const recommendedFirstModel = String(planData.recommendedFirstModel || firstModelName)
 
-      config.onLog(`Планировщик: ${steps.length} шагов, ~${estimatedSwitches} переключений модели`, 'success')
+      config.onLog?.(`Планировщик: ${steps.length} шагов, ~${estimatedSwitches} переключений модели`, 'success')
 
       return { steps, estimatedSwitches, recommendedFirstModel }
     }
     
     throw new Error('Некорректная структура плана')
   } catch (e) {
-    config.onLog('Планировщик: ошибка парсинга, создаю базовый план', 'warning')
+    config.onLog?.('Планировщик: ошибка парсинга, создаю базовый план', 'warning')
     
     const defaultModel = sortedModels[0]?.fileName || 'default'
     const defaultCapability = sortedModels[0]?.capability || 50
@@ -633,38 +641,45 @@ export async function evaluateCriterion(
   _planItem: PlanItem | null,
   fileContent: string
 ): Promise<CriterionResult> {
-  const preview = fileContent.substring(0, 1800)
+  // Determine domain and work type (auto-detect if not provided)
+  const contentAnalysis = config.contentAnalysis || analyzeContent(fileContent)
+  const workType = config.workType || detectWorkTypeWithConfidence('', '', fileContent).workType
+  const domain = contentAnalysis.domain
 
-  const sourcesBlock = config.sources && config.sources.length > 0
-    ? '\nСправочный материал:\n' +
-      config.sources.map((s) => `• ${s.name}: ${s.content.substring(0, 400)}`).join('\n') + '\n'
-    : ''
+  // Build domain-adapted few-shot block
+  const fewShotExamples = getDomainFewShotExamples(domain, criterion.name, 2)
+  const fewShotBlock = fewShotExamples.length > 0
+    ? fewShotExamples.map((ex, i) => {
+        const levelLabel = ex.score / ex.maxScore >= 0.9 ? 'ОТЛИЧНО' :
+                          ex.score / ex.maxScore >= 0.7 ? 'ХОРОШО' :
+                          ex.score / ex.maxScore >= 0.5 ? 'УДОВЛЕТВОРИТЕЛЬНО' : 'ПЛОХО'
+        return `
+ПРИМЕР ${i + 1} (${levelLabel} — ${ex.score}/${ex.maxScore}):
+Текст работы:
+${ex.workExcerpt}
 
-  const fewShotBlock = buildFewShotBlock(criterion.name, criterion.description, true)
+Оценка эксперта:
+Балл: ${ex.score}/${ex.maxScore}
+Обоснование: ${ex.justification}
+Рекомендации: ${ex.recommendations}
+---`
+      }).join('\n')
+    : buildFewShotBlock(criterion.name, criterion.description, false)
 
-  const prompt = `Ты — строгий эксперт по проверке студенческих работ. Твоя задача — объективно оценить работу по критерию.
+  // Build domain-specific prompt using promptTemplates
+  const prompt = buildCriterionPromptTpl(criterion, workType, contentAnalysis, fileContent)
 
+  // Compute optimal temperature and maxTokens for this criterion
+  const planComplexity = _planItem?.complexity || 'medium'
+  const temperature = getOptimalTemperature(domain, contentAnalysis.complexity, config.temperature)
+  const maxTokens = getOptimalMaxTokens(criterion.name, planComplexity)
+
+  const fullPrompt = `${prompt}
+
+ПРИМЕРЫ ОЦЕНКИ (для ориентира):
 ${fewShotBlock}
 
-ТЕКУЩАЯ РАБОТА ДЛЯ ПРОВЕРКИ:
-Критерий: ${criterion.name}
-Что проверяем: ${criterion.description}
-Максимум баллов: ${criterion.maxScore}
-${sourcesBlock}
-Текст работы студента:
-${preview}
-
-ЗАДАНИЕ:
-1) Внимательно изучи текст работы
-2) Сравни с примерами выше — насколько работа соответствует каждому уровню
-3) Выстави объективную оценку
-
-ШКАЛА ОЦЕНКИ:
-- 9-10/10: Отличная работа, все требования выполнены, высокое качество
-- 6-8/10: Хорошая работа, есть мелкие недочёты
-- 4-5/10: Удовлетворительно, видны существенные недостатки
-- 2-3/10: Неудовлетворительно, много серьёзных ошибок
-- 0-1/10: Критически плохо, работа не соответствует требованиям
+${buildScoreScale(criterion.maxScore, workType)}
 
 ФОРМАТ ОТВЕТА (только эти строки):
 Балл: [число]
@@ -677,20 +692,20 @@ ${preview}
   let status: 'ok' | 'error' | 'timeout' = 'ok'
 
   try {
-    result = await callLLM(config, prompt, {
-      maxTokens: 400,
-      temperature: 0.1,
+    result = await callLLM(config, fullPrompt, {
+      maxTokens,
+      temperature,
       assistantPrefix: ANCHOR,
       stop: ['\n\nКритерий', '\n\nТекст', '\n\nНапиши', '---', 'Задача:']
     })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     status = msg.includes('abort') ? 'timeout' : 'error'
-    config.onRequestLog?.({ criterion: criterion.name, prompt, response: `ОШИБКА: ${msg}`, durationMs: 0, status })
+    config.onRequestLog?.({ criterion: criterion.name, prompt: fullPrompt, response: `ОШИБКА: ${msg}`, durationMs: 0, status })
     throw e
   }
 
-  config.onRequestLog?.({ criterion: criterion.name, prompt, response: result.text, durationMs: result.durationMs, status })
+  config.onRequestLog?.({ criterion: criterion.name, prompt: fullPrompt, response: result.text, durationMs: result.durationMs, status })
   return parseModelResponse(result.text, criterion)
 }
 
@@ -777,7 +792,7 @@ export async function evaluateCriterionWithFeedback(
     }
 
     iterations++
-    config.onLog(`Feedback итерация ${iterations} для "${criterion.name}" (${result.score}/${result.maxScore})`, 'info')
+    config.onLog?.(`Feedback итерация ${iterations} для "${criterion.name}" (${result.score}/${result.maxScore})`, 'info')
     
     const iterationContext = iterations > 1
       ? `ПРЕДЫДУЩАЯ ИТЕРАЦИЯ: ${previousScore}/${result.maxScore} → ${result.score}/${result.maxScore}`
@@ -825,7 +840,7 @@ ${fileContent.substring(0, 1200)}
 
       const scoreDiff = Math.abs(result.score - previousScore) / result.maxScore
       if (scoreDiff < CONVERGENCE_THRESHOLD) {
-        config.onLog(`Feedback сошёлся для "${criterion.name}"`, 'info')
+        config.onLog?.(`Feedback сошёлся для "${criterion.name}"`, 'info')
         break
       }
     } catch {
@@ -1069,7 +1084,7 @@ ${preview}
       }))
     }
   } catch {
-    config.onLog('Генератор рубрик: не удалось разобрать JSON, создаётся рубрика по умолчанию', 'warning')
+    config.onLog?.('Генератор рубрик: не удалось разобрать JSON, создаётся рубрика по умолчанию', 'warning')
     // Fallback: generic academic rubric
     return {
       id: `ai_fallback_${Date.now()}`,

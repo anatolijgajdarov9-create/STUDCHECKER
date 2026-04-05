@@ -9,15 +9,16 @@ import {
 } from '../services/llamaApi'
 import { extractImagesFromDocument, analyzeImages, buildImageContext, type ExtractedImage, type ImageAnalysis } from '../services/imageAnalyzer'
 import { runPlagiarismCheck } from '../services/plagiarismChecker'
-import { 
-  parseModels, 
-  assignModels, 
-  uniqueModelNames, 
+import {
+  parseModels,
+  assignModels,
+  uniqueModelNames,
   analyzeContent,
   findModelByName,
   findClosestModel,
   buildModelsDescription
 } from '../services/modelSelector'
+import { detectWorkTypeWithConfidence } from '../services/promptTemplates'
 import { addToKnowledgeBase, findSimilar, buildRagContext, getKnowledgeBase } from '../services/ragService'
 import type { CriterionResult, ExpertStep, AiModel, RubricCriterion, PlanItem, ExecutionPlan } from '../types'
 import TutorialModal from './TutorialModal'
@@ -92,6 +93,24 @@ export default function AnalysisCenter() {
     // Analyse the first file's content before model assignment
     const firstContent = fileQueue[0]?.content ?? ''
 
+    // Global content analysis — shared across all services
+    const contentAnalysis = firstContent.length > 100 ? analyzeContent(firstContent) : null
+    const workTypeInfo = detectWorkTypeWithConfidence(fileQueue[0]?.name ?? '', selectedRubric.name, firstContent)
+
+    if (contentAnalysis) {
+      const domainLabels: Record<string, string> = {
+        technical: 'техническая/STEM', humanities: 'гуманитарная',
+        business: 'экономическая/бизнес', mixed: 'смешанная'
+      }
+      addLog(
+        `Анализ работы: ${domainLabels[contentAnalysis.domain]} тематика, ` +
+        `сложность ${Math.round(contentAnalysis.complexity * 100)}%, ` +
+        `~${contentAnalysis.wordCount} слов, ср. длина предложения ${Math.round(contentAnalysis.avgSentenceLen)} слов`,
+        'info'
+      )
+      addLog(`Тип работы: ${workTypeInfo.workType} (уверенность ${Math.round(workTypeInfo.confidence * 100)}%)`, 'info')
+    }
+
     try {
       if (isElectron) {
         addLog('Сканирование папки aimodels...', 'info')
@@ -107,21 +126,6 @@ export default function AnalysisCenter() {
 
         aiModels = parseModels(listResult.models)
         addLog(`Найдено моделей: ${aiModels.length} — ${aiModels.map((m) => m.displayName).join(', ')}`, 'success')
-
-        // Content analysis — determines domain and complexity before assignment
-        if (firstContent.length > 100) {
-          const ca = analyzeContent(firstContent)
-          const domainLabels: Record<string, string> = {
-            technical: 'техническая/STEM', humanities: 'гуманитарная',
-            business: 'экономическая/бизнес', mixed: 'смешанная'
-          }
-          addLog(
-            `Анализ работы: ${domainLabels[ca.domain]} тематика, ` +
-            `сложность ${Math.round(ca.complexity * 100)}%, ` +
-            `~${ca.wordCount} слов, ср. длина предложения ${Math.round(ca.avgSentenceLen)} слов`,
-            'info'
-          )
-        }
 
         modelAssignment = assignModels(aiModels, criteria, firstContent)
         firstModel = aiModels[0]
@@ -172,7 +176,9 @@ export default function AnalysisCenter() {
         modelId: activeModelId,
         sources: sourcesWithRag,
         onLog: addLog,
-        onRequestLog: addRequestLog
+        onRequestLog: addRequestLog,
+        contentAnalysis: contentAnalysis || undefined,
+        workType: workTypeInfo.workType
       }
 
       for (let fi = 0; fi < filesTotal; fi++) {
@@ -389,7 +395,7 @@ export default function AnalysisCenter() {
           : sourcesWithRag
 
         const criteriaResults: CriterionResult[] = []
-        let plagiarismCache: import('../types').PlagiarismReport | null = null
+        const plagiarismCacheRef: { current: import('../types').PlagiarismReport | null } = { current: null }
 
         const runPlagiarism = async (progressStepId: string) => {
           const report = await runPlagiarismCheck(
@@ -425,7 +431,7 @@ export default function AnalysisCenter() {
               })
             }
           )
-          plagiarismCache = report
+          plagiarismCacheRef.current = report
           setPlagiarismReport(report)
           return report
         }
@@ -462,7 +468,7 @@ export default function AnalysisCenter() {
             addLog(`Антиплагиат: запуск для критерия «${criterion.name}»...`, 'info')
 
             try {
-              const report = plagiarismCache ?? await runPlagiarism(stepId)
+              const report = plagiarismCacheRef.current ?? await runPlagiarism(stepId)
               const score = Math.round((report.originalityScore / 100) * criterion.maxScore)
               const sorted = report.checkedUrls
                 .filter((u) => u.matchPercent > 0)
@@ -606,12 +612,11 @@ export default function AnalysisCenter() {
         addLog(`Антиплагиат: запуск проверки (база знаний: ${kbCount} работ)...`, 'info')
 
         try {
-          if (plagiarismCache) {
-            addLog(`Антиплагиат: используется кэш (${plagiarismCache.checkedUrls.length} источников)`, 'info')
-          } else {
-            await runPlagiarism('plagiarism')
+          let rep: import('../types').PlagiarismReport | null = plagiarismCacheRef.current
+          if (!rep) {
+            rep = await runPlagiarism('plagiarism')
           }
-          const rep = plagiarismCache!
+          addLog(`Антиплагиат: результат ${rep.checkedUrls.length} источников`, 'info')
           updateExpertStep('plagiarism', { status: 'completed', score: rep.originalityScore, maxScore: 100, modelName: `${rep.originalityScore}% оригинальности` })
           addLog(`Антиплагиат: ${rep.originalityScore}% оригинальности (${rep.checkedUrls.length} источников)`, 'success')
 

@@ -7,6 +7,75 @@ const MAX_URLS_PER_QUERY = 6
 const MAX_QUERIES = 10
 const CONCURRENT_FETCHES = 5
 
+// ── Cache ─────────────────────────────────────────────────────────────────────
+
+const CACHE_KEY = 'studchecker-plagiarism-cache-v1'
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
+
+interface PlagiarismCacheEntry {
+  url: string
+  text: string
+  timestamp: number
+}
+
+interface PlagiarismCache {
+  entries: Record<string, PlagiarismCacheEntry> // url → entry
+}
+
+function loadCache(): PlagiarismCache {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (!raw) return { entries: {} }
+    const cache: PlagiarismCache = JSON.parse(raw)
+    // Expire old entries
+    const now = Date.now()
+    for (const key of Object.keys(cache.entries)) {
+      if (now - cache.entries[key].timestamp > CACHE_TTL_MS) {
+        delete cache.entries[key]
+      }
+    }
+    return cache
+  } catch {
+    return { entries: {} }
+  }
+}
+
+function saveCache(cache: PlagiarismCache): void {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
+  } catch {
+    // localStorage full — clear cache
+    try { localStorage.removeItem(CACHE_KEY) } catch {}
+  }
+}
+
+function getCached(url: string): string | null {
+  const cache = loadCache()
+  const entry = cache.entries[url]
+  if (!entry) return null
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    delete cache.entries[url]
+    saveCache(cache)
+    return null
+  }
+  return entry.text
+}
+
+function setCached(url: string, text: string): void {
+  const cache = loadCache()
+  cache.entries[url] = { url, text, timestamp: Date.now() }
+  // Limit cache size to 200 entries
+  const keys = Object.keys(cache.entries)
+  if (keys.length > 200) {
+    // Remove oldest entries
+    const sorted = keys.sort((a, b) => cache.entries[a].timestamp - cache.entries[b].timestamp)
+    for (const key of sorted.slice(0, keys.length - 200)) {
+      delete cache.entries[key]
+    }
+  }
+  saveCache(cache)
+}
+
 // ── N-gram utilities ─────────────────────────────────────────────────────────
 
 function tokenize(text: string): string[] {
@@ -165,6 +234,10 @@ async function searchDuckDuckGo(
 // ── Page text fetcher ────────────────────────────────────────────────────────
 
 async function fetchPageText(url: string): Promise<string> {
+  // Check cache first
+  const cached = getCached(url)
+  if (cached) return cached
+
   const { ok, text: html } = await universalFetch(url)
   if (!ok || !html) return ''
 
@@ -174,7 +247,12 @@ async function fetchPageText(url: string): Promise<string> {
     .querySelectorAll('script, style, nav, footer, header, aside, noscript, iframe')
     .forEach((el) => el.remove())
   const raw = doc.body?.innerText || doc.documentElement.innerText || ''
-  return raw.replace(/\s{2,}/g, ' ').trim().substring(0, 60000)
+  const cleaned = raw.replace(/\s{2,}/g, ' ').trim().substring(0, 60000)
+
+  // Cache the result
+  setCached(url, cleaned)
+
+  return cleaned
 }
 
 // ── Main exported function ───────────────────────────────────────────────────

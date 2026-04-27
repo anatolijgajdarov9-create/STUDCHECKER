@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(npx *)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(findstr *)",
+      "Bash(git *)"
     ]
   },
   "$version": 3
